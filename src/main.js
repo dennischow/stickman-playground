@@ -1,13 +1,17 @@
+import { audio } from './audio.js';
+
 (() => {
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
   const addBtn = document.getElementById('addBtn');
   const colorPicker = document.getElementById('colorPicker');
   const actionButtons = [...document.querySelectorAll('#toolbar [data-action]')];
+  const powerBtn = actionButtons.find(b => b.dataset.action === 'power');
   const statusEl = document.getElementById('readoutText');
   const selSwatch = document.getElementById('selSwatch');
   const powerGlyph = document.getElementById('powerGlyph');
   const revokeBtn = document.getElementById('revokeBtn');
+  const muteBtn = document.getElementById('muteBtn');
   const autonChk = document.getElementById('autonChk');
   const sceneSelect = document.getElementById('sceneSelect');
   let statusFlash = { text: '', until: 0 };
@@ -20,6 +24,7 @@
   let selected = null;
   let drag = null;
   let marquee = null;
+  let lastPointer = null;
   const bg = '#f7f6f2';
 
   const SCENES = {
@@ -112,6 +117,22 @@
   const effects = [];
   let shakeAmt = 0;
   let freezeT = 0;
+  let slowmoT = 0;
+  let slowmoDur = 1;
+  let slowmoScale = 1;
+  let inkFlash = 0;
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function requestHitStop(sec) {
+    freezeT = Math.max(freezeT, sec);
+  }
+
+  function requestSlowmo(scale = 0.35, dur = 0.45) {
+    if (reduceMotion) return;
+    slowmoScale = scale;
+    slowmoDur = dur;
+    slowmoT = dur;
+  }
 
   function resize() {
     DPR = Math.max(1, window.devicePixelRatio || 1);
@@ -134,6 +155,24 @@
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const lerp = (a, b, t) => a + (b - a) * t;
   const easeOut = t => 1 - (1 - t) * (1 - t);
+
+  const lerpPt = (a, b, t) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+  const lerpChain = (a, b, t) => a.map((p, i) => lerpPt(p, b[i], t));
+  const panFor = x => clamp(((x / Math.max(1, W)) * 2 - 1) * 0.7, -0.7, 0.7);
+  function blendPose(a, b, t) {
+    return {
+      head: lerpPt(a.head, b.head, t),
+      neck: lerpPt(a.neck, b.neck, t),
+      hip: lerpPt(a.hip, b.hip, t),
+      armL: lerpChain(a.armL, b.armL, t),
+      armR: lerpChain(a.armR, b.armR, t),
+      legL: lerpChain(a.legL, b.legL, t),
+      legR: lerpChain(a.legR, b.legR, t),
+      headR: a.headR + (b.headR - a.headR) * t,
+      s: a.s + (b.s - a.s) * t,
+      f: b.f
+    };
+  }
 
   function rot(px, py, a) {
     const c = Math.cos(a), s = Math.sin(a);
@@ -158,8 +197,40 @@
     }
   }
 
-  function spawnRing(x, y) {
-    effects.push({ type: 'ring', x, y, t: 0, life: 0.45 });
+  function spawnSkid(x, y, dir) {
+    for (let i = 0; i < 4; i++) {
+      effects.push({
+        type: 'dust',
+        x: x - dir * (6 + Math.random() * 14),
+        y: y - Math.random() * 3,
+        vx: -dir * (40 + Math.random() * 70),
+        vy: -12 - Math.random() * 30,
+        t: 0, life: 0.22 + Math.random() * 0.18,
+        r: 2 + Math.random() * 2.5
+      });
+    }
+  }
+
+  function spawnInk(x, y, n = 4) {
+    if (reduceMotion) n = Math.ceil(n * 0.5);
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = Math.random() * 38;
+      effects.push({
+        type: 'ink',
+        x: x + Math.cos(a) * d,
+        y: y + Math.sin(a) * d * 0.8,
+        vx: (Math.random() - 0.5) * 30,
+        vy: 8 + Math.random() * 34,
+        r: 2 + Math.random() * 6,
+        drip: Math.random() < 0.35 ? 6 + Math.random() * 14 : 0,
+        t: 0, life: 0.28 + Math.random() * 0.2
+      });
+    }
+  }
+
+  function spawnRing(x, y, scale = 1) {
+    effects.push({ type: 'ring', x, y, t: 0, life: 0.45, scale });
   }
 
   function updateEffects(dt) {
@@ -171,6 +242,10 @@
         e.x += e.vx * dt;
         e.y += e.vy * dt;
         e.vy += 90 * dt;
+      } else if (e.type === 'ink') {
+        e.x += e.vx * dt;
+        e.y += e.vy * dt;
+        e.vy += 30 * dt;
       }
     }
   }
@@ -211,19 +286,33 @@
         ctx.arc(e.x, e.y, e.r * (1 + k * 1.2), 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
+      } else if (e.type === 'ink') {
+        ctx.save();
+        ctx.globalAlpha = 0.72 * (1 - k);
+        ctx.fillStyle = '#1b1a17';
+        ctx.beginPath();
+        ctx.ellipse(e.x, e.y, e.r, e.r * (e.drip ? 1.08 : 0.82), 0, 0, Math.PI * 2);
+        ctx.fill();
+        if (e.drip) {
+          ctx.beginPath();
+          ctx.ellipse(e.x, e.y + e.r + e.drip * k * 0.6, Math.max(1, e.r * 0.3), e.drip * 0.42, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
       } else if (e.type === 'ring') {
-        const r = 12 + 130 * easeOut(k);
+        const sc = e.scale || 1;
+        const r = (12 + 130 * easeOut(k)) * sc;
         ctx.save();
         ctx.translate(e.x, e.y);
         ctx.globalAlpha = 0.85 * (1 - k);
         ctx.strokeStyle = k < 0.35 ? '#ffffff' : '#ffc107';
-        ctx.lineWidth = 5 * (1 - k) + 1;
+        ctx.lineWidth = (5 * (1 - k) + 1) * sc;
         ctx.beginPath();
         ctx.arc(0, 0, r, 0, Math.PI * 2);
         ctx.stroke();
         ctx.globalAlpha = 0.5 * (1 - k);
         ctx.strokeStyle = '#ff8f00';
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 2 * sc;
         ctx.beginPath();
         ctx.arc(0, 0, r * 0.7, 0, Math.PI * 2);
         ctx.stroke();
@@ -236,6 +325,7 @@
     a.startFight(b);
     b.startFight(a);
     a.trail.length = 0; b.trail.length = 0;
+    audio.duel(panFor((a.x + b.x) / 2));
   }
 
   function endDuel(f) {
@@ -254,8 +344,9 @@
     caster.pushAnim = 0.45;
     caster.x = clamp(caster.x - dir * 8, 50, W - 50);
     spawnRing(caster.x + dir * 26, caster.y - 55);
+    audio.blast(panFor(caster.x));
     shakeAmt = Math.max(shakeAmt, 6);
-    freezeT = Math.max(freezeT, 0.04);
+    requestHitStop(0.04);
     target.resetCombat();
     target.blown = { vx: dir * 1250, vy: -260, phase: 'fly', t: 0 };
     target.vy = 0;
@@ -302,6 +393,15 @@
       this.powerCd = 0;
       this.pushAnim = 0;
       this.blown = null;
+      this.blinkTimer = 1.5 + Math.random() * 2;
+      this.blinkT = 0;
+      this.blendT = 1;
+      this.blendDur = 0.14;
+      this.prevPose = null;
+      this._lastPose = null;
+      this._poseKey = '';
+      this._stepPhase = Math.floor(this.phase / Math.PI);
+      this._lastCombatState = 'idle';
     }
 
     isEnemy(o) {
@@ -325,6 +425,7 @@
       this.jumpT = 0;
       this.restT = 0;
       this.jumpPhase = 'crouch';
+      this._lastCombatState = 'idle';
       this.resetCombat();
     }
 
@@ -339,6 +440,7 @@
       if (this.behavior === b) return;
       this.behavior = b;
       this.phase = 0;
+      this._stepPhase = 0;
       if (b === 'jump') {
         this.jumpT = 0;
         this.restT = 0;
@@ -366,6 +468,12 @@
     }
 
     update(dt, groundY) {
+      this._update(dt, groundY);
+      this._tickBlend(dt);
+    }
+
+    _update(dt, groundY) {
+      this._tickFace(dt);
       this.randomizeBehavior(dt);
       const speed = this.speedMul;
       if (this.powerCd > 0) this.powerCd -= dt;
@@ -392,14 +500,19 @@
             b.phase = 'fall';
             spawnStar(this.x, this.y - 45, 1.6);
             spawnDust(this.x, Math.min(this.y + 8, groundY), 8);
+            spawnInk(this.x, this.y - 45, 6);
+            inkFlash = Math.max(inkFlash, 0.3);
             shakeAmt = Math.max(shakeAmt, 14);
-            freezeT = Math.max(freezeT, 0.07);
+            requestHitStop(0.07);
+            audio.wallHit(panFor(this.x));
           } else if (this.y >= groundY) {
             this.y = groundY;
             b.phase = 'down';
             b.t = 0.9;
             spawnDust(this.x, this.y, 6);
+            spawnInk(this.x, this.y - 24, 3);
             shakeAmt = Math.max(shakeAmt, 8);
+            audio.land(panFor(this.x), true);
           }
         } else if (b.phase === 'fall') {
           b.vy += 1500 * dt;
@@ -411,6 +524,7 @@
             b.t = 0.9;
             spawnDust(this.x, this.y, 6);
             shakeAmt = Math.max(shakeAmt, 8);
+            audio.land(panFor(this.x), true);
           }
         } else if (b.phase === 'down') {
           b.t -= dt;
@@ -452,6 +566,7 @@
             this.vy = -540;
             this.jumpT = 0;
             spawnDust(this.x, this.y, 4);
+            audio.jump(panFor(this.x));
           }
         } else {
           this.jumpPhase = 'air';
@@ -465,6 +580,8 @@
             this.restT = 0.55;
             this.jumpT = 0;
             spawnDust(this.x, this.y, 6);
+            spawnSkid(this.x, this.y, this.facing);
+            audio.land(panFor(this.x), false);
           }
         }
         this.x += this.facing * 40 * speed * dt * (this.y < groundY - 2 ? 1 : 0);
@@ -503,12 +620,47 @@
         if (this.behavior === 'walk') phaseRate = 0.11;
         else if (this.behavior === 'run') phaseRate = 0.085;
         this.phase += dt * moveSpeed * phaseRate * speed;
+        const stride = this.behavior === 'run' ? Math.PI * 2 : Math.PI;
+        const stepIdx = Math.floor(this.phase / stride);
+        if (stepIdx !== this._stepPhase) {
+          this._stepPhase = stepIdx;
+          audio.step(panFor(this.x), this.behavior === 'run');
+        }
         const margin = 50;
         if (this.x < margin) { this.x = margin; this.facing = 1; }
         if (this.x > W - margin) { this.x = W - margin; this.facing = -1; }
         if (Math.random() < 0.002) this.facing *= -1;
       } else {
         this.phase += dt * 1.6;
+      }
+    }
+
+    poseKey() {
+      const combat = this.fighting ? this.combat.state : '-';
+      const blasted = this.blown ? this.blown.phase : '-';
+      return `${this.behavior}|${combat}|${blasted}|${this.dragging ? 'drag' : ''}`;
+    }
+
+    _tickBlend(dt) {
+      if (this.dragging) {
+        this._poseKey = this.poseKey();
+        this.blendT = 1;
+        this.prevPose = null;
+        return;
+      }
+      const key = this.poseKey();
+      if (key !== this._poseKey) {
+        this.prevPose = this._lastPose;
+        this._poseKey = key;
+        this.blendT = 0;
+        this.blendDur = 0.14;
+        if (/knockdown|getup|launched/.test(key)) this.blendDur = 0.18;
+        else if (/punch|kick|combo|sweep|uppercut/.test(key)) this.blendDur = 0.09;
+        if (!this.prevPose) this.blendT = 1;
+      }
+      if (this.blendT < 1) {
+        this.blendT = Math.min(1, this.blendT + dt / this.blendDur);
+        if (this.blendT >= 1) this.prevPose = null;
       }
     }
 
@@ -520,12 +672,15 @@
       if (es === 'block') {
         this.x -= this.facing * 10;
         spawnStar((this.x + enemy.x) / 2, this.y - 60, 0.6);
+        spawnRing((this.x + enemy.x) / 2, this.y - 60, 0.45);
+        audio.block(panFor((this.x + enemy.x) / 2));
         return;
       }
       if (es === 'dodge' && enemy.combat.t > 0.14) return;
       if (es === 'stagger' || es === 'knockdown' || es === 'getup' || es === 'launched') return;      if (Math.random() < 0.25 && !opts.guaranteedKd) {
         enemy.combat.state = 'dodge';
         enemy.combat.t = 0.3;
+        audio.whoosh(panFor(enemy.x), 0.6);
         return;
       }
       const dir = enemy.x >= this.x ? 1 : -1;
@@ -540,7 +695,7 @@
         spawnDust(enemy.x, enemy.y, 7);
         spawnStar(midX, hitY, starScale * 1.3);
         shakeAmt = Math.max(shakeAmt, Math.max(shake, 9));
-        freezeT = Math.max(freezeT, 0.07);
+        requestHitStop(0.07);
       } else {
         enemy.combat.state = 'stagger';
         enemy.combat.t = 0.35;
@@ -548,14 +703,26 @@
         enemy.combat.kbx = dir * kbx;
         spawnStar(midX, hitY, starScale);
         shakeAmt = Math.max(shakeAmt, shake);
-        freezeT = Math.max(freezeT, freeze);
+        requestHitStop(freeze);
       }
+      spawnInk(midX, hitY, knocked ? 6 : 3);
+      spawnRing(midX, hitY, clamp(0.7 + kbx / 300, 0.7, 1.7));
+      if (knocked || kbx >= 240) inkFlash = Math.max(inkFlash, 0.32);
+      const kind = knocked || kbx >= 240 ? 'heavy' : kbx >= 150 || starScale >= 1.2 ? 'kick' : 'punch';
+      audio.hit(kind, clamp(0.75 + kbx / 420, 0.75, 1.35), panFor(midX));
+      if (knocked && kbx >= 240) audio.ko(panFor(enemy.x));
     }
 
     updateFight(dt, groundY) {
       const c = this.combat;
       c.t -= dt;
       this.phase += dt * 8;
+      if (c.state !== this._lastCombatState) {
+        this._lastCombatState = c.state;
+        if (/punch|kick|combo|spinkick|sweep|uppercut|flyingkick/.test(c.state)) {
+          audio.whoosh(panFor(this.x), /spinkick|flyingkick/.test(c.state) ? 1.2 : 0.8);
+        }
+      }
 
       if (Math.abs(c.kbx) > 1) {
         this.x += c.kbx * dt;
@@ -873,6 +1040,14 @@
     }
 
     pose() {
+      const target = this.computePose();
+      this._lastPose = target;
+      if (!this.prevPose || this.blendT >= 1) return target;
+      const t = this.blendT * this.blendT * (3 - 2 * this.blendT);
+      return blendPose(this.prevPose, target, t);
+    }
+
+    computePose() {
       const s = this.bodyScale;
       const p = this.phase;
       const headR = this.headR * s;
@@ -1170,8 +1345,218 @@
       return { head, neck, hip, armL, armR, legL, legR, headR, s, f };
     }
 
+    _tickFace(dt) {
+      const busy = this.fighting || (this.blown && this.blown.phase !== 'down');
+      if (busy) {
+        this.blinkT = 0;
+        return;
+      }
+      this.blinkT = Math.max(0, this.blinkT - dt);
+      this.blinkTimer -= dt;
+      if (this.blinkTimer <= 0) {
+        this.blinkT = 0.11;
+        this.blinkTimer = 2 + Math.random() * 3;
+      }
+    }
+
+    faceMood() {
+      if (this.blown && (this.blown.phase === 'down' || this.blown.phase === 'getup')) return 'dizzy';
+      if (this.fighting) {
+        const cs = this.combat.state;
+        if (cs === 'knockdown' || cs === 'launched' || cs === 'getup') return 'dizzy';
+        return 'focused';
+      }
+      if (this.behavior === 'run') return 'determined';
+      if (this.behavior === 'jump') {
+        if (this.jumpPhase === 'air' || this.jumpPhase === 'rest') return 'surprised';
+        if (this.jumpPhase === 'crouch') return 'braced';
+      }
+      return 'neutral';
+    }
+
+    faceDir(head) {
+      let tx, ty;
+      if (this.fighting && this.foe) {
+        const fp = this.foe._renderPose || this.foe.pose();
+        tx = this.foe.x + fp.head.x;
+        ty = this.foe.y + fp.head.y;
+      } else if (lastPointer) {
+        tx = lastPointer.x;
+        ty = lastPointer.y;
+      } else {
+        tx = this.x + this.facing * 260;
+        ty = this.y - 70;
+      }
+      const dx = tx - (this.x + head.x);
+      const dy = ty - (this.y + head.y);
+      const len = Math.hypot(dx, dy) || 1;
+      return { x: dx / len, y: dy / len };
+    }
+
+    drawFace(ctx, pose, headR) {
+      const { head } = pose;
+      const s = this.bodyScale;
+      const f = this.facing;
+      const eyeR = this.eyeR * Math.min(1, s + 0.1);
+      const mood = this.faceMood();
+      const ink = 'rgba(27, 26, 23, 0.88)';
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = Math.max(1.1, 1.5 * s);
+
+      if (mood === 'dizzy') {
+        const r = eyeR * 0.7;
+        ctx.beginPath();
+        ctx.moveTo(head.x - r, head.y - r);
+        ctx.lineTo(head.x + r, head.y + r);
+        ctx.moveTo(head.x + r, head.y - r);
+        ctx.lineTo(head.x - r, head.y + r);
+        ctx.stroke();
+      } else if (this.blinkT > 0) {
+        ctx.beginPath();
+        ctx.moveTo(head.x - eyeR, head.y);
+        ctx.lineTo(head.x + eyeR, head.y);
+        ctx.stroke();
+      } else {
+        const dir = this.faceDir(head);
+        const pr = Math.max(1.3, eyeR * 0.4);
+        const off = eyeR * 0.5;
+        ctx.beginPath();
+        ctx.arc(head.x + dir.x * off, head.y + dir.y * off, pr, 0, Math.PI * 2);
+        ctx.fillStyle = ink;
+        ctx.fill();
+      }
+
+      const bx = head.x;
+      const by = head.y - eyeR - 3.5 * s;
+      ctx.beginPath();
+      if (mood === 'focused') {
+        ctx.moveTo(bx - 5 * s * f, by - 1.5 * s);
+        ctx.lineTo(bx + 5 * s * f, by + 2 * s);
+      } else if (mood === 'determined') {
+        ctx.moveTo(bx - 5 * s * f, by + 1.5 * s);
+        ctx.lineTo(bx + 5 * s * f, by - 1 * s);
+      } else if (mood === 'surprised') {
+        ctx.moveTo(bx - 4 * s * f, by - 2 * s);
+        ctx.lineTo(bx + 4 * s * f, by - 2 * s);
+      } else if (mood === 'dizzy') {
+        ctx.moveTo(bx - 4 * s * f, by);
+        ctx.lineTo(bx + 4 * s * f, by + 1.5 * s);
+      }
+      ctx.stroke();
+
+      const mx = head.x + f * headR * 0.52;
+      const my = head.y + headR * 0.42;
+      ctx.beginPath();
+      if (mood === 'surprised') {
+        ctx.arc(mx, my, 2.1 * s, 0, Math.PI * 2);
+      } else if (mood === 'focused') {
+        ctx.moveTo(mx - 2.5 * s * f, my - 0.8 * s);
+        ctx.lineTo(mx + 2.5 * s * f, my + 0.8 * s);
+      } else if (mood === 'determined') {
+        ctx.moveTo(mx - 3 * s * f, my);
+        ctx.lineTo(mx + 3 * s * f, my - 0.6 * s);
+      } else if (mood === 'dizzy') {
+        ctx.moveTo(mx - 3 * s * f, my);
+        ctx.quadraticCurveTo(mx, my + 2.5 * s, mx + 3 * s * f, my);
+      } else if (mood === 'braced') {
+        ctx.moveTo(mx - 2 * s * f, my);
+        ctx.lineTo(mx + 2 * s * f, my);
+      } else {
+        ctx.moveTo(mx - 2.4 * s * f, my);
+        ctx.lineTo(mx + 2.4 * s * f, my - 0.4 * s);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    drawShadow(ctx, groundY) {
+      const pose = this._renderPose || this.pose();
+      const { head, neck, hip, armL, armR, legL, legR } = pose;
+      const pts = [head, neck, hip, ...armL, ...armR, ...legL, ...legR];
+      let minX = Infinity, maxX = -Infinity;
+      for (const p of pts) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+      }
+      const s = this.bodyScale;
+      const air = Math.max(0, groundY - this.y);
+      const fade = clamp(1 - air / 400, 0, 1);
+      const alpha = 0.25 * fade * (this.blown ? 0.45 : 1);
+      if (alpha <= 0.01) return;
+      const rx = Math.max(16, (maxX - minX + 26 * s) * 0.55) * (1 - Math.min(air / 900, 0.28));
+      const ry = Math.max(3, 5.5 * s * (1 - Math.min(air / 700, 0.45)));
+      ctx.save();
+      ctx.translate(this.x, groundY + 1);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(27, 26, 23, ${alpha * 0.55})`;
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(0, 0, rx * 0.62, ry * 0.62, 0, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(27, 26, 23, ${alpha})`;
+      ctx.fill();
+      ctx.restore();
+    }
+
+    drawSpeedLines(ctx, pose) {
+      const f = this.facing;
+      const cs = this.fighting ? this.combat.state : '';
+      const attacking = cs === 'punch' || cs === 'kick' || cs === 'combo' || cs === 'sweep' ||
+        cs === 'uppercut' || cs === 'flyingkick' || cs === 'spinkick';
+      const running = !this.fighting && this.behavior === 'run' && !this.dragging;
+      if (!running && !attacking) return;
+
+      const p = this.phase;
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = 'rgba(27, 26, 23, 0.38)';
+
+      if (running) {
+        ctx.lineWidth = 1.3;
+        for (let i = 0; i < 4; i++) {
+          const yy = pose.hip.y - 8 - i * 9 + Math.sin(p * 2 + i) * 3;
+          const len = 14 + (i % 2) * 10 + Math.abs(Math.cos(p + i)) * 14;
+          ctx.globalAlpha = 0.35 - i * 0.05;
+          ctx.beginPath();
+          ctx.moveTo(-f * (22 + i * 4), yy);
+          ctx.lineTo(-f * (22 + len + i * 4), yy);
+          ctx.stroke();
+        }
+      } else if (cs === 'spinkick') {
+        const a0 = this.combat.spin || 0;
+        ctx.lineWidth = 1.4;
+        for (let i = 0; i < 6; i++) {
+          const a = a0 + (i / 6) * Math.PI * 2;
+          const r0 = 26 + (i % 2) * 7;
+          const r1 = r0 + 18 + (i % 3) * 8;
+          ctx.globalAlpha = 0.34;
+          ctx.beginPath();
+          ctx.moveTo(Math.cos(a) * r0, pose.hip.y + Math.sin(a) * r0);
+          ctx.lineTo(Math.cos(a) * r1, pose.hip.y + Math.sin(a) * r1);
+          ctx.stroke();
+        }
+      } else {
+        const y = pose.hip.y - 10;
+        const len = cs === 'flyingkick' ? 70 : 34;
+        const n = cs === 'flyingkick' ? 5 : 3;
+        ctx.lineWidth = 1.5;
+        for (let i = 0; i < n; i++) {
+          const yy = y - i * 8 + Math.sin(p * 4 + i) * 2;
+          ctx.globalAlpha = 0.32 - i * 0.04;
+          ctx.beginPath();
+          ctx.moveTo(-f * (30 + i * 5), yy);
+          ctx.lineTo(-f * (30 + len + i * 5), yy);
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+
     draw(ctx) {
-      const pose = this.pose();
+      const pose = this._renderPose || this.pose();
       const { head, neck, hip, armL, armR, legL, legR, headR } = pose;
 
       if (this.trail.length) {
@@ -1213,6 +1598,7 @@
 
       ctx.save();
       ctx.translate(this.x, this.y);
+      this.drawSpeedLines(ctx, pose);
 
       if (this.fighting && this.combat.spin) {
         ctx.translate(0, hip.y);
@@ -1266,6 +1652,8 @@
       ctx.arc(head.x, head.y, this.eyeR, 0, Math.PI * 2, true);
       ctx.fillStyle = this.color;
       ctx.fill('evenodd');
+
+      this.drawFace(ctx, pose, headR);
 
       if (this.hasPower) {
         const pulse = 1 + Math.sin(performance.now() / 300) * 0.08;
@@ -1375,7 +1763,6 @@
     if (!selected && sel.length) selected = sel[sel.length - 1];
     const has = !!selected;
     const multi = sel.length > 1;
-    const powerBtn = actionButtons.find(b => b.dataset.action === 'power');
     for (const btn of actionButtons) {
       btn.disabled = !has;
       let on = false;
@@ -1470,6 +1857,21 @@
   }
   document.body.dataset.scene = sceneId;
 
+  function syncMuteUI() {
+    if (!muteBtn) return;
+    muteBtn.setAttribute('aria-pressed', String(audio.muted));
+    muteBtn.textContent = audio.muted ? 'Muted' : 'Sound';
+    muteBtn.title = audio.muted ? 'Unmute sound (M)' : 'Mute sound (M)';
+  }
+  if (muteBtn) {
+    syncMuteUI();
+    muteBtn.addEventListener('click', () => {
+      audio.unlock();
+      audio.toggleMute();
+      syncMuteUI();
+    });
+  }
+
   for (const btn of actionButtons) {
     btn.addEventListener('click', () => {
       if (!selected) return;
@@ -1477,6 +1879,7 @@
         if (selected.blown) return;
         if (!selected.hasPower) {
           selected.hasPower = true;
+          audio.charge(panFor(selected.x));
           flashStatus('Superpower granted! Click again to blast', 2200);
         } else if (selected.powerCd > 0) {
           flashStatus('Superpower recharging…');
@@ -1539,6 +1942,13 @@
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
     const key = e.key.toLowerCase();
+    if (key === 'm') {
+      e.preventDefault();
+      audio.unlock();
+      audio.toggleMute();
+      syncMuteUI();
+      return;
+    }
     if (key === 'a') {
       e.preventDefault();
       addBtn.click();
@@ -1567,6 +1977,7 @@
 
   canvas.addEventListener('pointerdown', e => {
     const { x, y } = pointerPos(e);
+    lastPointer = { x, y };
     const additive = e.shiftKey || e.metaKey || e.ctrlKey;
     let hitFig = null;
     for (let i = figures.length - 1; i >= 0; i--) {
@@ -1603,6 +2014,7 @@
 
   canvas.addEventListener('pointermove', e => {
     const { x, y } = pointerPos(e);
+    lastPointer = { x, y };
     if (drag) {
       const dx = x - drag.sx;
       const dy = y - drag.sy;
@@ -1664,6 +2076,7 @@
   addFigure(W / 2, H - 70, '#e53935');
 
   let last = performance.now();
+  let lastUITime = 0;
 
   function frame(now) {
     const rdt = Math.min(0.05, (now - last) / 1000);
@@ -1674,12 +2087,19 @@
     if (freezeT > 0) {
       freezeT -= rdt;
       dt = 0;
+    } else if (slowmoT > 0) {
+      slowmoT = Math.max(0, slowmoT - rdt);
+      const k = 1 - slowmoT / slowmoDur;
+      const eased = k * k * (3 - 2 * k);
+      dt = rdt * lerp(slowmoScale, 1, eased);
     }
 
     if (dt > 0) {
       for (const f of figures) f.update(dt, groundY);
       updateEffects(dt);
     }
+
+    for (const f of figures) f._renderPose = f.pose();
 
     if (sceneDirty) renderScene();
     ctx.drawImage(sceneCanvas, 0, 0, W, H);
@@ -1689,6 +2109,7 @@
       ctx.translate((Math.random() - 0.5) * shakeAmt, (Math.random() - 0.5) * shakeAmt);
     }
 
+    for (const f of figures) f.drawShadow(ctx, groundY);
     for (const f of figures) f.draw(ctx);
 
     if (marquee && marquee.moved) {
@@ -1715,7 +2136,22 @@
       shakeAmt = 0;
     }
 
-    updateUI();
+    if (inkFlash > 0) {
+      ctx.save();
+      ctx.globalAlpha = inkFlash;
+      ctx.fillStyle = '#f7f6f2';
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+      inkFlash = Math.max(0, inkFlash - rdt * 8);
+    }
+
+    if (selected && selected.hasPower && selected.powerCd > 0) {
+      powerBtn.style.setProperty('--cd', Math.min(1, selected.powerCd / 4).toFixed(3));
+    }
+    if (now - lastUITime >= 100) {
+      updateUI();
+      lastUITime = now;
+    }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

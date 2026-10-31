@@ -48,14 +48,22 @@
       <button id="revokeBtn" type="button" hidden title="Remove the superpower from the selected figure">Revoke</button>
     </div>
   </div>
+  <div class="sep"></div>
+  <div class="group" id="soundGroup">
+    <span class="group-label">Sound</span>
+    <button id="muteBtn" type="button" aria-pressed="false" title="Mute sound (M)">Sound</button>
+  </div>
   <div id="readout" aria-live="polite">
     <span id="selSwatch" hidden></span>
     <span id="readoutText">Add a stick figure to get started</span>
     <span id="powerGlyph" title="Superpower"></span>
   </div>
 </div>
-<div id="hint">drag to move · shift-click or box-select · 1–5 motion · F fight · P power · R revoke · A add</div>
+<div id="hint">drag to move · shift-click or box-select · 1–5 motion · F fight · P power · R revoke · A add · M mute</div>
 <canvas id="c"></canvas>
+<div id="vignette" aria-hidden="true"></div>
+<div id="screentone" aria-hidden="true"></div>
+<div id="grain" aria-hidden="true"></div>
 <script type="module" src="/src/main.js"></script>
 </body>
 </html>
