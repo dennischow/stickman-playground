@@ -1,0 +1,1722 @@
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const addBtn = document.getElementById('addBtn');
+  const colorPicker = document.getElementById('colorPicker');
+  const actionButtons = [...document.querySelectorAll('#toolbar [data-action]')];
+  const statusEl = document.getElementById('readoutText');
+  const selSwatch = document.getElementById('selSwatch');
+  const powerGlyph = document.getElementById('powerGlyph');
+  const revokeBtn = document.getElementById('revokeBtn');
+  const autonChk = document.getElementById('autonChk');
+  const sceneSelect = document.getElementById('sceneSelect');
+  let statusFlash = { text: '', until: 0 };
+  function flashStatus(text, ms = 1800) {
+    statusFlash = { text, until: performance.now() + ms };
+  }
+
+  let W = 0, H = 0, DPR = 1;
+  const figures = [];
+  let selected = null;
+  let drag = null;
+  let marquee = null;
+  const bg = '#f7f6f2';
+
+  const SCENES = {
+    paper: { label: 'Paper', src: null, veil: 0 },
+    lake: { label: 'Lake', src: '/backgrounds/lake.jpg', veil: 0.32 },
+    factory: { label: 'Factory', src: '/backgrounds/factory.jpg', veil: 0.34 },
+    bridge: { label: 'Bridge', src: '/backgrounds/bridge.jpg', veil: 0.32 },
+    highway: { label: 'Highway', src: '/backgrounds/highway.jpg', veil: 0.34 },
+    island: { label: 'Floating Island', src: '/backgrounds/island.jpg', veil: 0.30 }
+  };
+  let sceneId = 'paper';
+  try {
+    const savedScene = localStorage.getItem('stickman.scene');
+    if (savedScene && SCENES[savedScene]) sceneId = savedScene;
+  } catch (err) {}
+  let sceneDirty = true;
+  const sceneCanvas = document.createElement('canvas');
+  const sceneCtx = sceneCanvas.getContext('2d');
+  const sceneImages = {};
+  for (const [id, sc] of Object.entries(SCENES)) {
+    if (!sc.src) continue;
+    const img = new Image();
+    img.decoding = 'async';
+    img.onload = () => { sc.ready = true; sceneDirty = true; };
+    img.src = sc.src;
+    sceneImages[id] = img;
+  }
+
+  function setScene(id) {
+    if (!SCENES[id]) return;
+    sceneId = id;
+    sceneDirty = true;
+    if (sceneSelect) sceneSelect.value = id;
+    document.body.dataset.scene = id;
+    try { localStorage.setItem('stickman.scene', id); } catch (err) {}
+  }
+
+  function drawGround(c, photo) {
+    const gy = H - 70;
+    c.save();
+    if (photo) {
+      c.strokeStyle = 'rgba(247, 246, 242, 0.62)';
+      c.lineWidth = 3;
+      c.beginPath();
+      c.moveTo(-10, gy);
+      c.lineTo(W + 10, gy);
+      c.stroke();
+      c.strokeStyle = 'rgba(27, 26, 23, 0.30)';
+      c.lineWidth = 1.2;
+    } else {
+      c.strokeStyle = '#d8d3c7';
+      c.lineWidth = 1.5;
+    }
+    c.beginPath();
+    c.moveTo(-10, gy);
+    c.lineTo(W + 10, gy);
+    c.stroke();
+    c.restore();
+  }
+
+  function renderScene() {
+    sceneCanvas.width = Math.max(1, Math.floor(W * DPR));
+    sceneCanvas.height = Math.max(1, Math.floor(H * DPR));
+    sceneCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    const sc = SCENES[sceneId];
+    const img = sceneImages[sceneId];
+    if (sc && img && sc.ready) {
+      const iw = img.naturalWidth;
+      const ih = img.naturalHeight;
+      const scale = Math.max(W / iw, H / ih);
+      const dw = iw * scale;
+      const dh = ih * scale;
+      sceneCtx.save();
+      sceneCtx.filter = 'saturate(0.78) contrast(0.96)';
+      sceneCtx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
+      sceneCtx.restore();
+      sceneCtx.globalAlpha = sc.veil;
+      sceneCtx.fillStyle = bg;
+      sceneCtx.fillRect(0, 0, W, H);
+      sceneCtx.globalAlpha = 1;
+      drawGround(sceneCtx, true);
+    } else {
+      sceneCtx.fillStyle = bg;
+      sceneCtx.fillRect(0, 0, W, H);
+      drawGround(sceneCtx, false);
+    }
+    sceneDirty = false;
+  }
+
+  const effects = [];
+  let shakeAmt = 0;
+  let freezeT = 0;
+
+  function resize() {
+    DPR = Math.max(1, window.devicePixelRatio || 1);
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    sceneDirty = true;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    const groundY = H - 70;
+    for (const f of figures) {
+      if (f.y > groundY) f.y = groundY;
+    }
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const easeOut = t => 1 - (1 - t) * (1 - t);
+
+  function rot(px, py, a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return { x: px * c - py * s, y: px * s + py * c };
+  }
+
+  function spawnStar(x, y, scale = 1) {
+    effects.push({ type: 'star', x, y, t: 0, life: 0.18, scale });
+  }
+
+  function spawnDust(x, y, n = 5) {
+    for (let i = 0; i < n; i++) {
+      effects.push({
+        type: 'dust',
+        x: x + (Math.random() - 0.5) * 22,
+        y: y - Math.random() * 4,
+        vx: (Math.random() - 0.5) * 50,
+        vy: -20 - Math.random() * 45,
+        t: 0, life: 0.3 + Math.random() * 0.25,
+        r: 2 + Math.random() * 3.5
+      });
+    }
+  }
+
+  function spawnRing(x, y) {
+    effects.push({ type: 'ring', x, y, t: 0, life: 0.45 });
+  }
+
+  function updateEffects(dt) {
+    for (let i = effects.length - 1; i >= 0; i--) {
+      const e = effects[i];
+      e.t += dt;
+      if (e.t >= e.life) { effects.splice(i, 1); continue; }
+      if (e.type === 'dust') {
+        e.x += e.vx * dt;
+        e.y += e.vy * dt;
+        e.vy += 90 * dt;
+      }
+    }
+  }
+
+  function drawEffects() {
+    for (const e of effects) {
+      const k = e.t / e.life;
+      if (e.type === 'star') {
+        const r = (6 + 14 * easeOut(k)) * e.scale;
+        ctx.save();
+        ctx.translate(e.x, e.y);
+        ctx.globalAlpha = 1 - k;
+        ctx.strokeStyle = k < 0.4 ? '#fff' : '#ffd54f';
+        ctx.lineWidth = 2.5 * e.scale;
+        ctx.lineCap = 'round';
+        for (let i = 0; i < 4; i++) {
+          const a = (i / 4) * Math.PI * 2 + k * 0.6;
+          ctx.beginPath();
+          ctx.moveTo(Math.cos(a) * r * 0.35, Math.sin(a) * r * 0.35);
+          ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+          ctx.stroke();
+        }
+        ctx.strokeStyle = '#ff8f00';
+        ctx.lineWidth = 1.5 * e.scale;
+        for (let i = 0; i < 4; i++) {
+          const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+          ctx.beginPath();
+          ctx.moveTo(Math.cos(a) * r * 0.25, Math.sin(a) * r * 0.25);
+          ctx.lineTo(Math.cos(a) * r * 0.7, Math.sin(a) * r * 0.7);
+          ctx.stroke();
+        }
+        ctx.restore();
+      } else if (e.type === 'dust') {
+        ctx.save();
+        ctx.globalAlpha = 0.45 * (1 - k);
+        ctx.fillStyle = '#9aa3ad';
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, e.r * (1 + k * 1.2), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      } else if (e.type === 'ring') {
+        const r = 12 + 130 * easeOut(k);
+        ctx.save();
+        ctx.translate(e.x, e.y);
+        ctx.globalAlpha = 0.85 * (1 - k);
+        ctx.strokeStyle = k < 0.35 ? '#ffffff' : '#ffc107';
+        ctx.lineWidth = 5 * (1 - k) + 1;
+        ctx.beginPath();
+        ctx.arc(0, 0, r, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 0.5 * (1 - k);
+        ctx.strokeStyle = '#ff8f00';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(0, 0, r * 0.7, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+
+  function startDuel(a, b) {
+    a.startFight(b);
+    b.startFight(a);
+    a.trail.length = 0; b.trail.length = 0;
+  }
+
+  function endDuel(f) {
+    const other = f.foe;
+    f.foe = null;
+    f.stopFight();
+    if (other && other.foe === f) {
+      other.foe = null;
+      other.stopFight();
+    }
+  }
+
+  function blastFigure(caster, target, cd = 4) {
+    const dir = target.x !== caster.x ? Math.sign(target.x - caster.x) : caster.facing;
+    caster.powerCd = cd;
+    caster.pushAnim = 0.45;
+    caster.x = clamp(caster.x - dir * 8, 50, W - 50);
+    spawnRing(caster.x + dir * 26, caster.y - 55);
+    shakeAmt = Math.max(shakeAmt, 6);
+    freezeT = Math.max(freezeT, 0.04);
+    target.resetCombat();
+    target.blown = { vx: dir * 1250, vy: -260, phase: 'fly', t: 0 };
+    target.vy = 0;
+    target.bodyScale = 1;
+    if (target.foe && target.foe.fighting && target.foe.foe === target) {
+      const partner = target.foe;
+      partner.combat.state = 'ready';
+      partner.combat.t = 0;
+      partner.combat.cd = Math.max(partner.combat.cd, 0.6);
+      partner.combat.hitDone = false;
+      partner.combat.spin = 0;
+      partner.trail.length = 0;
+    }
+    flashStatus('Blast!', 1000);
+  }
+
+  class StickFigure {
+    constructor(x, y, color) {
+      this.x = x;
+      this.y = y;
+      this.color = color;
+      this.behavior = 'idle';
+      this.phase = Math.random() * Math.PI * 2;
+      this.vy = 0;
+      this.facing = Math.random() < 0.5 ? -1 : 1;
+      this.dragging = false;
+      this.selected = false;
+      this.primary = false;
+      this.think = 1 + Math.random() * 2.5;
+      this.speedMul = 0.9 + Math.random() * 0.35;
+      this.bodyScale = 1;
+      this.jumpT = 0;
+      this.jumpPhase = 'crouch';
+      this.headR = 13;
+      this.eyeR = 4.5;
+      this.fighting = false;
+      this.foe = null;
+      this.trail = [];
+      this.combat = {
+        state: 'idle', t: 0, cd: 0.4 + Math.random() * 0.6,
+        hitDone: false, kbx: 0, spin: 0, hits: 0
+      };
+      this.hasPower = false;
+      this.powerCd = 0;
+      this.pushAnim = 0;
+      this.blown = null;
+    }
+
+    isEnemy(o) {
+      return o !== this && o.color.toLowerCase() !== this.color.toLowerCase();
+    }
+
+    resetCombat() {
+      this.combat = {
+        state: 'ready', t: 0, cd: 0.4 + Math.random() * 0.6,
+        hitDone: false, kbx: 0, spin: 0, hits: 0
+      };
+    }
+
+    startFight(foe) {
+      this.fighting = true;
+      this.foe = foe || null;
+      this.behavior = 'idle';
+      this.phase = 0;
+      this.vy = 0;
+      this.bodyScale = 1;
+      this.jumpT = 0;
+      this.restT = 0;
+      this.jumpPhase = 'crouch';
+      this.resetCombat();
+    }
+
+    stopFight() {
+      this.fighting = false;
+      this.foe = null;
+      this.trail.length = 0;
+      this.combat = { state: 'idle', t: 0, cd: 0, hitDone: false, kbx: 0, spin: 0, hits: 0 };
+    }
+
+    setBehavior(b) {
+      if (this.behavior === b) return;
+      this.behavior = b;
+      this.phase = 0;
+      if (b === 'jump') {
+        this.jumpT = 0;
+        this.restT = 0;
+      }
+    }
+
+    randomizeBehavior(dt) {
+      if (this.dragging) return;
+      if (this.fighting) return;
+      if (this.blown) return;
+      if (!autonChk.checked) return;
+      if (this.y < H - 72) return;
+      this.think -= dt;
+      if (this.think > 0) return;
+      this.think = 1.5 + Math.random() * 3;
+      const r = Math.random();
+      if (r < 0.12) this.setBehavior('idle');
+      else if (r < 0.42) this.setBehavior('walk');
+      else if (r < 0.68) this.setBehavior('run');
+      else if (r < 0.85) this.setBehavior('crawl');
+      else this.setBehavior('jump');
+      if (this.behavior !== 'idle' && Math.random() < 0.5) {
+        this.facing = Math.random() < 0.5 ? -1 : 1;
+      }
+    }
+
+    update(dt, groundY) {
+      this.randomizeBehavior(dt);
+      const speed = this.speedMul;
+      if (this.powerCd > 0) this.powerCd -= dt;
+      if (this.pushAnim > 0) this.pushAnim -= dt;
+
+      if (this.dragging) {
+        this.vy = 0;
+        this.phase += dt * 2;
+        return;
+      }
+
+      if (this.blown) {
+        const b = this.blown;
+        this.phase += dt * 6;
+        if (b.phase === 'fly') {
+          this.x += b.vx * dt;
+          b.vy += 180 * dt;
+          this.y += b.vy * dt;
+          const margin = 50;
+          const atWall = (b.vx < 0 && this.x <= margin) || (b.vx > 0 && this.x >= W - margin);
+          if (atWall) {
+            this.x = b.vx < 0 ? margin : W - margin;
+            b.vx = 0;
+            b.phase = 'fall';
+            spawnStar(this.x, this.y - 45, 1.6);
+            spawnDust(this.x, Math.min(this.y + 8, groundY), 8);
+            shakeAmt = Math.max(shakeAmt, 14);
+            freezeT = Math.max(freezeT, 0.07);
+          } else if (this.y >= groundY) {
+            this.y = groundY;
+            b.phase = 'down';
+            b.t = 0.9;
+            spawnDust(this.x, this.y, 6);
+            shakeAmt = Math.max(shakeAmt, 8);
+          }
+        } else if (b.phase === 'fall') {
+          b.vy += 1500 * dt;
+          this.y += b.vy * dt;
+          if (this.y >= groundY) {
+            this.y = groundY;
+            b.vy = 0;
+            b.phase = 'down';
+            b.t = 0.9;
+            spawnDust(this.x, this.y, 6);
+            shakeAmt = Math.max(shakeAmt, 8);
+          }
+        } else if (b.phase === 'down') {
+          b.t -= dt;
+          if (b.t <= 0) {
+            b.phase = 'getup';
+            b.t = 0.4;
+          }
+        } else if (b.phase === 'getup') {
+          b.t -= dt;
+          if (b.t <= 0) {
+            this.blown = null;
+            this.vy = 0;
+            if (this.behavior === 'jump') {
+              this.jumpT = 0;
+              this.restT = 0;
+              this.jumpPhase = 'crouch';
+            }
+          }
+        }
+        return;
+      }
+
+      if (this.behavior === 'jump' && !this.fighting) {
+        const onGround = this.y >= groundY - 0.5 && this.vy === 0;
+        this.phase += dt * 3;
+        if (onGround) {
+          if (this.restT > 0) {
+            this.restT -= dt;
+            this.jumpT = 0;
+            this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 12));
+            this.jumpPhase = 'rest';
+          } else if (this.jumpT < 0.3) {
+            this.jumpPhase = 'crouch';
+            this.jumpT += dt;
+            this.bodyScale = lerp(1, 0.84, this.jumpT / 0.3);
+          } else {
+            this.jumpPhase = 'air';
+            this.bodyScale = 1.08;
+            this.vy = -540;
+            this.jumpT = 0;
+            spawnDust(this.x, this.y, 4);
+          }
+        } else {
+          this.jumpPhase = 'air';
+          this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 10));
+          this.vy += 1500 * dt;
+          this.y += this.vy * dt;
+          if (this.y >= groundY) {
+            this.y = groundY;
+            this.vy = 0;
+            this.bodyScale = 0.88;
+            this.restT = 0.55;
+            this.jumpT = 0;
+            spawnDust(this.x, this.y, 6);
+          }
+        }
+        this.x += this.facing * 40 * speed * dt * (this.y < groundY - 2 ? 1 : 0);
+        const margin = 50;
+        if (this.x < margin) { this.x = margin; this.facing = 1; }
+        if (this.x > W - margin) { this.x = W - margin; this.facing = -1; }
+        return;
+      }
+
+      this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 10));
+      if (this.y < groundY || this.vy < 0) {
+        this.vy += 1500 * dt;
+        this.y += this.vy * dt;
+        if (this.y >= groundY) {
+          this.y = groundY;
+          this.vy = 0;
+        }
+      } else {
+        this.y = groundY;
+        this.vy = 0;
+      }
+
+      if (this.fighting) {
+        this.updateFight(dt, groundY);
+        return;
+      }
+
+      let moveSpeed = 0;
+      if (this.behavior === 'walk') moveSpeed = 90;
+      else if (this.behavior === 'run') moveSpeed = 200;
+      else if (this.behavior === 'crawl') moveSpeed = 45;
+
+      if (moveSpeed > 0) {
+        this.x += this.facing * moveSpeed * speed * dt;
+        let phaseRate = 0.09;
+        if (this.behavior === 'walk') phaseRate = 0.11;
+        else if (this.behavior === 'run') phaseRate = 0.085;
+        this.phase += dt * moveSpeed * phaseRate * speed;
+        const margin = 50;
+        if (this.x < margin) { this.x = margin; this.facing = 1; }
+        if (this.x > W - margin) { this.x = W - margin; this.facing = -1; }
+        if (Math.random() < 0.002) this.facing *= -1;
+      } else {
+        this.phase += dt * 1.6;
+      }
+    }
+
+    landHit(enemy, opts) {
+      const { range, kbx, kdChance = 0, freeze = 0.05, shake = 5, starScale = 1 } = opts;
+      const dist = Math.abs(enemy.x - this.x);
+      if (dist > range) return;
+      const es = enemy.combat.state;
+      if (es === 'block') {
+        this.x -= this.facing * 10;
+        spawnStar((this.x + enemy.x) / 2, this.y - 60, 0.6);
+        return;
+      }
+      if (es === 'dodge' && enemy.combat.t > 0.14) return;
+      if (es === 'stagger' || es === 'knockdown' || es === 'getup' || es === 'launched') return;      if (Math.random() < 0.25 && !opts.guaranteedKd) {
+        enemy.combat.state = 'dodge';
+        enemy.combat.t = 0.3;
+        return;
+      }
+      const dir = enemy.x >= this.x ? 1 : -1;
+      const midX = (this.x + enemy.x) / 2;
+      const hitY = this.y - 55;
+      const knocked = opts.guaranteedKd || Math.random() < kdChance;
+      if (knocked) {
+        enemy.combat.state = 'knockdown';
+        enemy.combat.t = 0.85;
+        enemy.combat.spin = 0;
+        enemy.combat.kbx = dir * Math.max(160, kbx);
+        spawnDust(enemy.x, enemy.y, 7);
+        spawnStar(midX, hitY, starScale * 1.3);
+        shakeAmt = Math.max(shakeAmt, Math.max(shake, 9));
+        freezeT = Math.max(freezeT, 0.07);
+      } else {
+        enemy.combat.state = 'stagger';
+        enemy.combat.t = 0.35;
+        enemy.combat.spin = 0;
+        enemy.combat.kbx = dir * kbx;
+        spawnStar(midX, hitY, starScale);
+        shakeAmt = Math.max(shakeAmt, shake);
+        freezeT = Math.max(freezeT, freeze);
+      }
+    }
+
+    updateFight(dt, groundY) {
+      const c = this.combat;
+      c.t -= dt;
+      this.phase += dt * 8;
+
+      if (Math.abs(c.kbx) > 1) {
+        this.x += c.kbx * dt;
+        c.kbx *= Math.pow(0.001, dt);
+      } else c.kbx = 0;
+
+      if (this.foe && (!this.foe.fighting || this.foe.foe !== this)) {
+        this.stopFight();
+        return;
+      }
+      const enemy = this.foe;
+      if (!enemy) {
+        c.state = 'wander';
+        this.x += this.facing * 50 * this.speedMul * dt;
+        this.x = clamp(this.x, 50, W - 50);
+        if (this.x <= 50) this.facing = 1;
+        if (this.x >= W - 50) this.facing = -1;
+        return;
+      }
+
+      const dx = enemy.x - this.x;
+      const dist = Math.abs(dx);
+      if (dist > 4) this.facing = dx > 0 ? 1 : -1;
+
+      const downStates = ['knockdown', 'getup', 'launched', 'stagger'];
+      if (dist < 26 && !downStates.includes(c.state) && !downStates.includes(enemy.combat.state)) {
+        this.x -= this.facing * (26 - dist) * 0.5;
+        this.x = clamp(this.x, 50, W - 50);
+      }
+
+      if (enemy.blown) {
+        c.state = 'ready';
+        c.t = 0;
+        c.cd = Math.max(c.cd, 0.2);
+        c.hitDone = false;
+        c.spin = 0;
+        this.trail.length = 0;
+        return;
+      }
+
+      const airborne = this.y < groundY - 2;
+      const trailStates = ['flyingkick', 'spinkick', 'punch', 'kick', 'combo', 'uppercut'];
+      if (trailStates.includes(c.state)) {
+        this.trail.push({ x: this.x, y: this.y, spin: c.spin, snap: this.pose() });
+        if (this.trail.length > 6) this.trail.shift();
+      } else {
+        this.trail.length = 0;
+      }
+      if (c.state !== 'spinkick' && c.spin) c.spin = 0;
+
+      if (c.state === 'stagger') {
+        if (c.t <= 0) { c.state = 'ready'; c.cd = 0.45 + Math.random() * 0.5; }
+        return;
+      }
+
+      if (c.state === 'launched') {
+        if (!airborne && c.t < 0.35) {
+          spawnDust(this.x, this.y, 4);
+          c.state = 'stagger';
+          c.t = 0.25;
+        }
+        return;
+      }
+
+      if (c.state === 'knockdown') {
+        if (airborne) return;
+        if (c.t <= 0) {
+          c.state = 'getup';
+          c.t = 0.45;
+        }
+        return;
+      }
+
+      if (c.state === 'getup') {
+        const elapsed = 0.45 - c.t;
+        if (elapsed > 0.3 && this.vy === 0 && this.y >= groundY - 0.5) {
+          this.vy = -170;
+          spawnDust(this.x, this.y, 3);
+        }
+        if (c.t <= 0) { c.state = 'ready'; c.cd = 0.35 + Math.random() * 0.4; }
+        return;
+      }
+
+      if (c.state === 'approach') {
+        if (dist > 78) {
+          this.x += this.facing * 95 * this.speedMul * dt;
+        } else {
+          c.state = 'ready';
+          c.cd = 0.2 + Math.random() * 0.4;
+        }
+        this.x = clamp(this.x, 50, W - 50);
+        return;
+      }
+
+      if (c.state === 'dodge') {
+        this.x += this.facing * -95 * dt;
+        if (c.t <= 0) { c.state = 'ready'; c.cd = 0.45 + Math.random() * 0.45; }
+        this.x = clamp(this.x, 50, W - 50);
+        return;
+      }
+
+      if (c.state === 'block') {
+        if (c.t <= 0) { c.state = 'ready'; c.cd = 0.35 + Math.random() * 0.35; }
+        return;
+      }
+
+      if (c.state === 'flyingkick') {
+        const total = 0.85;
+        const elapsed = total - c.t;
+        if (elapsed < 0.18) {
+          this.bodyScale = lerp(1, 0.82, elapsed / 0.18);
+        } else if (!c.hitDone && elapsed >= 0.18) {
+          c.hitDone = true;
+          this.bodyScale = 1;
+          this.vy = -400;
+          const gap = Math.max(0, dist - 90);
+          c.lungeV = this.facing * clamp(gap / 0.35, 240, 620);
+          spawnDust(this.x, this.y, 4);
+        }
+        if (c.hitDone && airborne) {
+          this.x += c.lungeV * dt;
+          this.x = clamp(this.x, 50, W - 50);
+          if (!c.kickDone && elapsed > 0.24 && Math.abs(enemy.x - this.x) <= 130) {
+            c.kickDone = true;
+            this.landHit(enemy, { range: 130, kbx: 280, kdChance: 0.4, freeze: 0.07, shake: 10, starScale: 1.4 });
+            c.lungeV *= 0.3;
+          }
+        }
+        if (c.hitDone && !airborne && elapsed > 0.3) {
+          spawnDust(this.x, this.y, 5);
+          c.state = 'ready';
+          c.cd = 0.5 + Math.random() * 0.4;
+          c.hitDone = false;
+          c.kickDone = false;
+        }
+        if (c.t <= -0.4) {
+          this.y = groundY; this.vy = 0;
+          c.state = 'ready'; c.cd = 0.4;
+          c.hitDone = false; c.kickDone = false;
+        }
+        this.x = clamp(this.x, 50, W - 50);
+        return;
+      }
+
+      if (c.state === 'spinkick') {
+        const total = 0.55;
+        const elapsed = total - c.t;
+        c.spin = easeOut(clamp(elapsed / 0.5, 0, 1)) * Math.PI * 2 * this.facing;
+        this.x += this.facing * 60 * dt;
+        if (!c.hitDone && elapsed > 0.18) {
+          c.hitDone = true;
+          this.landHit(enemy, { range: 105, kbx: 210, kdChance: 0.2, freeze: 0.05, shake: 7, starScale: 1.15 });
+        }
+        if (c.t <= 0) {
+          c.spin = 0;
+          c.state = 'ready';
+          c.hitDone = false;
+          c.cd = 0.5 + Math.random() * 0.4;
+        }
+        this.x = clamp(this.x, 50, W - 50);
+        return;
+      }
+
+      if (c.state === 'sweep') {
+        const total = 0.5;
+        const elapsed = total - c.t;
+        this.bodyScale = elapsed < 0.15 ? lerp(1, 0.72, elapsed / 0.15) : 0.72;
+        this.x += this.facing * 45 * dt * (elapsed > 0.15 && elapsed < 0.35 ? 1 : 0);
+        if (!c.hitDone && elapsed > 0.16) {
+          c.hitDone = true;
+          this.landHit(enemy, { range: 95, kbx: 170, guaranteedKd: true, freeze: 0.06, shake: 8, starScale: 1.1 });
+        }
+        if (c.t <= 0) {
+          this.bodyScale = 1;
+          c.state = 'ready';
+          c.hitDone = false;
+          c.cd = 0.55 + Math.random() * 0.4;
+        }
+        this.x = clamp(this.x, 50, W - 50);
+        return;
+      }
+
+      if (c.state === 'uppercut') {
+        const total = 0.48;
+        const elapsed = total - c.t;
+        if (elapsed < 0.16) {
+          this.bodyScale = lerp(1, 0.85, elapsed / 0.16);
+        } else if (elapsed < 0.26) {
+          this.bodyScale = lerp(0.85, 1.08, (elapsed - 0.16) / 0.1);
+          if (!c.hitDone) {
+            c.hitDone = true;
+            this.landHit(enemy, { range: 90, kbx: 100, freeze: 0.08, shake: 10, starScale: 1.5 });
+            if (enemy.combat.state === 'stagger') {
+              enemy.combat.state = 'launched';
+              enemy.combat.t = 0.6;
+              enemy.vy = -300;
+            }
+          }
+        }
+        if (c.t <= 0) {
+          this.bodyScale = 1;
+          c.state = 'ready';
+          c.hitDone = false;
+          c.cd = 0.55 + Math.random() * 0.4;
+        }
+        this.x = clamp(this.x, 50, W - 50);
+        return;
+      }
+
+      if (c.state === 'punch' || c.state === 'kick') {
+        const total = c.state === 'punch' ? 0.35 : 0.45;
+        const elapsed = total - c.t;
+        const lungeEnd = c.state === 'punch' ? 0.15 : 0.12;
+        if (elapsed < lungeEnd) this.x += this.facing * (c.state === 'punch' ? 130 : 85) * dt;
+        const hitAt = c.state === 'punch' ? 0.18 : 0.25;
+        const hitRange = c.state === 'punch' ? 95 : 105;
+        if (!c.hitDone && elapsed >= hitAt) {
+          c.hitDone = true;
+          this.landHit(enemy, {
+            range: hitRange,
+            kbx: c.state === 'punch' ? 150 : 190,
+            kdChance: c.state === 'kick' ? 0.1 : 0,
+            starScale: c.state === 'punch' ? 0.9 : 1.1
+          });
+        }
+        if (c.t <= 0) {
+          c.state = 'ready';
+          c.hitDone = false;
+          c.cd = 0.45 + Math.random() * 0.5;
+        }
+        this.x = clamp(this.x, 50, W - 50);
+        return;
+      }
+
+      if (c.state === 'combo') {
+        const total = 0.95;
+        const elapsed = total - c.t;
+        c.comboStep = elapsed < 0.3 ? 0 : elapsed < 0.58 ? 1 : 2;
+        if (elapsed < 0.3) this.x += this.facing * 70 * dt;
+        else if (elapsed > 0.6) this.x += this.facing * 100 * dt;
+        if (!(c.hits & 1) && elapsed >= 0.14) {
+          c.hits |= 1;
+          this.landHit(enemy, { range: 92, kbx: 50, starScale: 0.75, freeze: 0.03, shake: 3 });
+        }
+        if (!(c.hits & 2) && elapsed >= 0.4) {
+          c.hits |= 2;
+          this.landHit(enemy, { range: 92, kbx: 60, starScale: 0.8, freeze: 0.03, shake: 4 });
+        }
+        if (!(c.hits & 4) && elapsed >= 0.66) {
+          c.hits |= 4;
+          this.landHit(enemy, { range: 108, kbx: 200, kdChance: 0.18, starScale: 1.25, freeze: 0.06, shake: 8 });
+        }
+        if (c.t <= 0) {
+          c.state = 'ready';
+          c.hits = 0;
+          c.cd = 0.6 + Math.random() * 0.5;
+        }
+        this.x = clamp(this.x, 50, W - 50);
+        return;
+      }
+
+      // ready
+      c.cd -= dt;
+      if (airborne) return;
+      const eState = enemy.combat.state;
+      const downStates2 = ['knockdown', 'getup', 'launched', 'stagger'];
+      if (downStates2.includes(eState)) {
+        c.cd = 0.12;
+        if (dist > 120) c.state = 'approach';
+        return;
+      }
+      const enemyAttacking = ['punch', 'kick', 'flyingkick', 'spinkick', 'sweep', 'uppercut', 'combo'].includes(eState);
+      if (enemyAttacking && dist < 125 && Math.random() < 0.06) {
+        if (Math.random() < 0.45) {
+          c.state = 'block';
+          c.t = 0.45;
+        } else {
+          c.state = 'dodge';
+          c.t = 0.3;
+        }
+        return;
+      }
+      if (this.hasPower && this.powerCd <= 0 && dist < 240 && Math.random() < 0.2) {
+        blastFigure(this, enemy, 5 + Math.random() * 3);
+        c.state = 'ready';
+        c.t = 0;
+        c.cd = 1.1;
+        c.hitDone = false;
+        c.spin = 0;
+        this.trail.length = 0;
+        return;
+      }
+      if (c.cd <= 0) {
+        const r = Math.random();
+        if (dist > 200) {
+          if (r < 0.7) c.state = 'approach';
+          else { c.state = 'flyingkick'; c.t = 0.85; c.hitDone = false; c.kickDone = false; }
+        } else if (dist > 100) {
+          if (r < 0.3) c.state = 'approach';
+          else if (r < 0.55) { c.state = 'flyingkick'; c.t = 0.85; c.hitDone = false; c.kickDone = false; }
+          else if (r < 0.7) { c.state = 'spinkick'; c.t = 0.55; c.hitDone = false; c.spin = 0; }
+          else if (r < 0.85) { c.state = 'punch'; c.t = 0.35; c.hitDone = false; }
+          else { c.state = 'kick'; c.t = 0.45; c.hitDone = false; }
+        } else {
+          if (r < 0.16) { c.state = 'punch'; c.t = 0.35; c.hitDone = false; }
+          else if (r < 0.28) { c.state = 'kick'; c.t = 0.45; c.hitDone = false; }
+          else if (r < 0.4) { c.state = 'combo'; c.t = 0.95; c.hits = 0; }
+          else if (r < 0.52) { c.state = 'spinkick'; c.t = 0.55; c.hitDone = false; c.spin = 0; }
+          else if (r < 0.63) { c.state = 'sweep'; c.t = 0.5; c.hitDone = false; }
+          else if (r < 0.73) { c.state = 'uppercut'; c.t = 0.48; c.hitDone = false; }
+          else if (r < 0.85) { c.state = 'block'; c.t = 0.4; }
+          else { c.state = 'dodge'; c.t = 0.3; }
+        }
+      }
+    }
+
+    pose() {
+      const s = this.bodyScale;
+      const p = this.phase;
+      const headR = this.headR * s;
+      const f = this.facing;
+      const b = this.behavior;
+      const crawling = b === 'crawl' && !this.dragging && !this.fighting;
+      const hipY = (crawling ? -14 : -38) * s;
+
+      let lean = 0;
+      if (b === 'run') lean = 0.38 * f;
+      else if (b === 'walk') lean = 0.06 * f;
+      else if (b === 'crawl') lean = 1.4 * f;
+      else if (b === 'jump') lean = 0.1 * f;
+      if (this.dragging) lean = 0.05 * f;
+      else if (this.pushAnim > 0) lean = 0.32 * f;
+      else if (this.fighting) {
+        const cs = this.combat.state;
+        if (cs === 'punch') lean = 0.2 * f;
+        else if (cs === 'kick') lean = -0.12 * f;
+        else if (cs === 'block') lean = -0.06 * f;
+        else if (cs === 'stagger') lean = -0.32 * f;
+        else if (cs === 'dodge') lean = -0.18 * f;
+        else if (cs === 'flyingkick') lean = 0.45 * f;
+        else if (cs === 'spinkick') lean = 0.15 * f;
+        else if (cs === 'sweep') lean = 0.5 * f;
+        else if (cs === 'uppercut') lean = 0.08 * f;
+        else if (cs === 'combo') lean = 0.18 * f;
+        else if (cs === 'knockdown') lean = -1.35 * f;
+        else if (cs === 'launched') lean = -0.5 * f;
+        else if (cs === 'getup') lean = 0.3 * f;
+        else lean = 0.1 * f;
+      }
+
+      let bounce = 0;
+      if (!this.dragging && !crawling) {
+        if (b === 'run') bounce = Math.abs(Math.cos(p)) * 5 * s;
+        else if (b === 'walk') bounce = Math.abs(Math.cos(p)) * 1.5 * s;
+      }
+
+      let hip, neck, head;
+      const fightingPose = this.fighting && !this.dragging;
+      const blownDown = !!this.blown && this.blown.phase === 'down';
+      const knockedLying = blownDown ||
+        (fightingPose && this.combat.state === 'knockdown' && this.y >= H - 72);
+
+      if (knockedLying) {
+        hip = { x: -6 * f, y: -8 };
+        neck = { x: -38 * f, y: -6 };
+        head = { x: -54 * f, y: -10 };
+      } else {
+        hip = { x: 0, y: hipY - bounce };
+        const neckLocal = rot(0, -34 * s, lean);
+        neck = { x: hip.x + neckLocal.x, y: hip.y + neckLocal.y };
+        head = crawling
+          ? { x: neck.x + f * (headR + 5), y: neck.y - 3 * s }
+          : { x: neck.x, y: neck.y - headR - 6 };
+      }
+
+      let la, ra, la2, ra2, lHip, rHip, lKnee, rKnee;
+
+      if (knockedLying) {
+        la = -1.1 + Math.sin(p * 6) * 0.15; la2 = 0.7;
+        ra = -0.9 - Math.sin(p * 6) * 0.15; ra2 = 0.6;
+        lHip = 0.8; rHip = 0.55;
+        lKnee = -1.1; rKnee = -0.85;
+      } else if (this.blown && (this.blown.phase === 'fly' || this.blown.phase === 'fall')) {
+        const w = Math.sin(p * 16);
+        la = -1.2 + w * 0.5; la2 = 0.55;
+        ra = -1.0 - w * 0.5; ra2 = 0.5;
+        lHip = 0.7 + w * 0.2; rHip = 0.1 - w * 0.25;
+        lKnee = -0.9; rKnee = -0.5;
+      } else if (this.blown && this.blown.phase === 'getup') {
+        const prog = clamp((0.4 - this.blown.t) / 0.4, 0, 1);
+        la = lerp(0.7, 0.15, prog); la2 = lerp(0.55, 0.3, prog);
+        ra = lerp(0.75, 0.2, prog); ra2 = lerp(0.5, 0.3, prog);
+        lHip = lerp(0.95, 0.1, prog); rHip = lerp(0.9, 0.05, prog);
+        lKnee = lerp(-0.4, -0.2, prog); rKnee = lerp(-0.4, -0.15, prog);
+      } else if (fightingPose) {
+        const cs = this.combat.state;
+        const bob = Math.sin(p * 2) * 0.04;
+        lHip = 0.45 + bob; rHip = -0.35;
+        lKnee = -0.55; rKnee = -0.25;
+        la = 0.9; la2 = -0.5;
+        ra = -0.4; ra2 = 1.5;
+
+        if (cs === 'punch') {
+          const e = 0.35 - this.combat.t;
+          const prog = Math.min(clamp(e / 0.18, 0, 1), 1 - clamp((e - 0.18) / 0.12, 0, 1));
+          la = lerp(0.9, 0.35, prog); la2 = lerp(-0.5, 1.2, prog);
+          ra = lerp(-0.4, 1.5, prog); ra2 = lerp(1.5, 0, prog);
+        } else if (cs === 'kick') {
+          const e = 0.45 - this.combat.t;
+          const prog = Math.min(clamp(e / 0.25, 0, 1), 1 - clamp((e - 0.25) / 0.14, 0, 1));
+          lHip = lerp(0.45, 1.3, prog); lKnee = lerp(-0.55, -0.12, prog);
+          rHip = -0.25; rKnee = -0.35;
+          la = lerp(0.9, -0.8, prog); la2 = lerp(-0.5, 0.3, prog);
+          ra = lerp(-0.4, 0.9, prog); ra2 = lerp(1.5, 0.35, prog);
+        } else if (cs === 'combo') {
+          const step = this.combat.comboStep || 0;
+          const e = 0.95 - this.combat.t;
+          if (step === 0) {
+            const prog = Math.min(clamp(e / 0.10, 0, 1), 1 - clamp((e - 0.14) / 0.10, 0, 1));
+            ra = lerp(-0.4, 1.5, prog); ra2 = lerp(1.5, 0, prog);
+            la = 0.85; la2 = -0.4;
+          } else if (step === 1) {
+            const e2 = e - 0.3;
+            const prog = Math.min(clamp(e2 / 0.08, 0, 1), 1 - clamp((e2 - 0.12) / 0.10, 0, 1));
+            la = lerp(0.9, 1.5, prog); la2 = lerp(-0.5, 0, prog);
+            ra = lerp(1.5, -0.35, prog); ra2 = lerp(0, 1.4, prog);
+          } else {
+            const e3 = e - 0.58;
+            const prog = Math.min(clamp(e3 / 0.12, 0, 1), 1 - clamp((e3 - 0.16) / 0.14, 0, 1));
+            lHip = lerp(0.45, 1.35, prog); lKnee = lerp(-0.55, -0.1, prog);
+            la = lerp(0.9, -0.85, prog); la2 = lerp(-0.5, 0.35, prog);
+            ra = lerp(-0.35, 0.95, prog); ra2 = lerp(1.4, 0.3, prog);
+          }
+        } else if (cs === 'flyingkick') {
+          const elapsed = 0.85 - this.combat.t;
+          if (elapsed < 0.18) {
+            la = 0.6; la2 = 0.5;
+            ra = 0.65; ra2 = 0.45;
+            lHip = 0.85; rHip = 0.85;
+            lKnee = 0.55 - lHip; rKnee = 0.55 - rHip;
+          } else {
+            lHip = 1.45; lKnee = -0.05;
+            rHip = -0.75; rKnee = 1.35;
+            la = -0.9; la2 = 0.35;
+            ra = -1.15; ra2 = 0.5;
+          }
+        } else if (cs === 'spinkick') {
+          lHip = 1.5; lKnee = -0.08;
+          rHip = -0.3; rKnee = -0.4;
+          la = -0.7 + Math.sin(p * 10) * 0.2; la2 = 0.4;
+          ra = -0.85; ra2 = 0.3;
+        } else if (cs === 'sweep') {
+          lHip = 1.55; lKnee = -0.05;
+          rHip = -0.5; rKnee = 0.9;
+          la = -0.6; la2 = 0.9;
+          ra = 0.4; ra2 = 1.1;
+        } else if (cs === 'uppercut') {
+          const elapsed = 0.48 - this.combat.t;
+          if (elapsed < 0.16) {
+            la = 0.75; la2 = 0.6;
+            ra = 0.4; ra2 = 0.9;
+            lHip = 0.7; rHip = 0.55;
+            lKnee = 0.4 - lHip; rKnee = 0.35 - rHip;
+          } else {
+            const prog = Math.min(clamp((elapsed - 0.16) / 0.1, 0, 1), 1 - clamp((elapsed - 0.26) / 0.14, 0, 1));
+            la = lerp(0.75, 0.5, prog); la2 = lerp(0.6, 0.5, prog);
+            ra = lerp(0.4, -1.35, prog); ra2 = lerp(0.9, 0.15, prog);
+            lHip = lerp(0.7, 0.15, prog); rHip = lerp(0.55, -0.1, prog);
+            lKnee = lerp(0.4 - 0.7, -0.2, prog); rKnee = lerp(0.35 - 0.55, -0.15, prog);
+          }
+        } else if (cs === 'block') {
+          lHip = 0.35; lKnee = -0.6;
+          la = 0.65; la2 = 1.45;
+          ra = 0.75; ra2 = 1.4;
+        } else if (cs === 'stagger') {
+          la = -1.3 + Math.sin(p * 14) * 0.35; la2 = 0.5;
+          ra = -1.1 - Math.sin(p * 14) * 0.35; ra2 = 0.4;
+          lHip = 0.2; rHip = -0.55;
+          lKnee = -0.2; rKnee = -0.45;
+        } else if (cs === 'launched') {
+          la = -1.4 + Math.sin(p * 16) * 0.4; la2 = 0.6;
+          ra = -1.2 - Math.sin(p * 16) * 0.4; ra2 = 0.5;
+          lHip = 0.7; rHip = 0.3;
+          lKnee = -0.9; rKnee = -0.6;
+        } else if (cs === 'getup') {
+          const elapsed = 0.45 - this.combat.t;
+          if (elapsed < 0.28) {
+            la = 0.7; la2 = 0.55;
+            ra = 0.75; ra2 = 0.5;
+            lHip = 0.95; rHip = 0.9;
+            lKnee = 0.55 - lHip; rKnee = 0.5 - rHip;
+          } else {
+            la = 0.2; la2 = 0.35;
+            ra = 0.25; ra2 = 0.3;
+            lHip = 0.25; rHip = 0.15;
+            lKnee = -0.3; rKnee = -0.2;
+          }
+        } else {
+          la = 0.9 + bob; la2 = -0.5;
+          ra = -0.4 - bob; ra2 = 1.5;
+        }
+      } else if (b === 'walk') {
+        const sw = Math.sin(p);
+        lHip = sw * 0.7; rHip = -sw * 0.7;
+        lKnee = -(0.1 + 0.95 * Math.max(0, Math.cos(p - 0.5)));
+        rKnee = -(0.1 + 0.95 * Math.max(0, Math.cos(p + Math.PI - 0.5)));
+        la = 0.08 - sw * 0.45;
+        ra = 0.08 + sw * 0.45;
+        la2 = 0.3; ra2 = 0.3;
+      } else if (b === 'run') {
+        const sw = Math.sin(p);
+        lHip = sw; rHip = -sw;
+        lKnee = -(0.35 + 1.65 * Math.max(0, Math.cos(p - 0.3)));
+        rKnee = -(0.35 + 1.65 * Math.max(0, Math.cos(p + Math.PI - 0.3)));
+        la = 0.35 - sw * 0.7;
+        ra = 0.35 + sw * 0.7;
+        la2 = 1.1; ra2 = 1.1;
+      } else if (b === 'crawl') {
+        la = 1.15 + Math.sin(p) * 0.45;
+        ra = 1.15 + Math.sin(p + Math.PI) * 0.45;
+        la2 = 0; ra2 = 0;
+        lHip = -(1.0 + Math.sin(p) * 0.35);
+        rHip = -(1.0 + Math.sin(p + Math.PI) * 0.35);
+        lKnee = -(clamp(Math.sin(p + Math.PI) * 0.5 + 0.35, 0, 0.9) - lHip);
+        rKnee = -(clamp(Math.sin(p) * 0.5 + 0.35, 0, 0.9) - rHip);
+      } else if (b === 'jump') {
+        const airborne = this.y < H - 72 - 2;
+        if (airborne || this.vy !== 0) {
+          if (this.vy < -120) {
+            la = 2.65; ra = 2.45;
+            la2 = -0.45; ra2 = -0.4;
+            lHip = 0.4; rHip = -0.3;
+            lKnee = -0.55; rKnee = -0.45;
+          } else if (this.vy > 120) {
+            la = -0.75; ra = 0.55;
+            la2 = 0.5; ra2 = 0.45;
+            lHip = 0.25; rHip = -0.15;
+            lKnee = -0.3; rKnee = -0.25;
+          } else {
+            la = 1.7; ra = 1.55;
+            la2 = -0.6; ra2 = -0.5;
+            lHip = 1.25; rHip = 1.0;
+            lKnee = -1.5; rKnee = -1.35;
+          }
+        } else if (this.bodyScale < 0.95) {
+          la = -0.85; ra = -0.7;
+          la2 = 0.55; ra2 = 0.5;
+          lHip = 0.85; rHip = 0.7;
+          lKnee = 0.15 - lHip; rKnee = 0.1 - rHip;
+        } else {
+          la = 0.12 + Math.sin(p) * 0.12;
+          ra = 0.12 - Math.sin(p) * 0.12;
+          la2 = 0.28; ra2 = 0.28;
+          lHip = 0; rHip = 0; lKnee = 0; rKnee = 0;
+        }
+      } else {
+        const idle = Math.sin(p * 0.9);
+        la = 0.12 + idle * 0.08;
+        ra = 0.12 - idle * 0.08;
+        la2 = 0.28; ra2 = 0.28;
+        lHip = 0; rHip = 0; lKnee = 0; rKnee = 0;
+        head.y += idle * 1.2;
+      }
+
+      if (this.dragging) {
+        la = -0.55 + Math.sin(p * 3) * 0.2;
+        ra = -0.55 - Math.sin(p * 3) * 0.2;
+        la2 = 0.3; ra2 = 0.3;
+        lHip = 0.35; rHip = 0.2;
+        lKnee = 0.2 - lHip; rKnee = 0.15 - rHip;
+        head.y += Math.sin(p * 4) * 2;
+      } else if (this.pushAnim > 0) {
+        la = 1.5; la2 = 0.05;
+        ra = 1.4; ra2 = 0.1;
+        lHip = 0.5; rHip = -0.25;
+        lKnee = -0.25; rKnee = -0.15;
+      }
+
+      const upperArm = 24 * s, lowerArm = 22 * s;
+      const upperLeg = 22 * s, lowerLeg = 22 * s;
+
+      function limb(origin, a1, a2, l1, l2) {
+        const j = { x: origin.x + Math.sin(a1) * l1, y: origin.y + Math.cos(a1) * l1 };
+        const e = { x: j.x + Math.sin(a1 + a2) * l2, y: j.y + Math.cos(a1 + a2) * l2 };
+        return [origin, j, e];
+      }
+
+      let armL, armR, legL, legR;
+
+      if (crawling) {
+        const a = Math.sin(p);
+        const b2 = Math.sin(p + Math.PI);
+        armL = [neck,
+          { x: neck.x + f * (13 + a * 8) * s, y: -9 * s },
+          { x: neck.x + f * (28 + a * 17) * s, y: -4 * s }];
+        armR = [neck,
+          { x: neck.x + f * (13 + b2 * 8) * s, y: -9 * s },
+          { x: neck.x + f * (28 + b2 * 17) * s, y: -4 * s }];
+        legL = [hip,
+          { x: -f * (17 + b2 * 7) * s, y: (-11 - Math.max(0, b2) * 4) * s },
+          { x: -f * (33 + b2 * 11) * s, y: (-4 - Math.max(0, b2) * 8) * s }];
+        legR = [hip,
+          { x: -f * (17 + a * 7) * s, y: (-11 - Math.max(0, a) * 4) * s },
+          { x: -f * (33 + a * 11) * s, y: (-4 - Math.max(0, a) * 8) * s }];
+      } else {
+        armL = limb(neck, la * f, la2 * f, upperArm, lowerArm);
+        armR = limb(neck, ra * f, ra2 * f, upperArm, lowerArm);
+        legL = limb(hip, lHip * f, lKnee * f, upperLeg, lowerLeg);
+        legR = limb(hip, rHip * f, rKnee * f, upperLeg, lowerLeg);
+      }
+
+      return { head, neck, hip, armL, armR, legL, legR, headR, s, f };
+    }
+
+    draw(ctx) {
+      const pose = this.pose();
+      const { head, neck, hip, armL, armR, legL, legR, headR } = pose;
+
+      if (this.trail.length) {
+        for (let i = 0; i < this.trail.length; i++) {
+          const g = this.trail[i];
+          const a = ((i + 1) / this.trail.length) * 0.28;
+          const gp = g.snap;
+          ctx.save();
+          ctx.translate(g.x, g.y);
+          if (g.spin) {
+            ctx.translate(0, gp.hip.y);
+            ctx.rotate(g.spin);
+            ctx.translate(0, -gp.hip.y);
+          }
+          ctx.globalAlpha = a;
+          ctx.strokeStyle = this.color;
+          ctx.lineWidth = 2.5;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          function ghostLimb(pts) {
+            ctx.beginPath();
+            ctx.moveTo(pts[0].x, pts[0].y);
+            ctx.lineTo(pts[1].x, pts[1].y);
+            ctx.lineTo(pts[2].x, pts[2].y);
+            ctx.stroke();
+          }
+          ghostLimb(gp.legL); ghostLimb(gp.legR);
+          ghostLimb(gp.armL); ghostLimb(gp.armR);
+          ctx.beginPath();
+          ctx.moveTo(gp.hip.x, gp.hip.y);
+          ctx.lineTo(gp.neck.x, gp.neck.y);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(gp.head.x, gp.head.y, gp.headR, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+
+      ctx.save();
+      ctx.translate(this.x, this.y);
+
+      if (this.fighting && this.combat.spin) {
+        ctx.translate(0, hip.y);
+        ctx.rotate(this.combat.spin);
+        ctx.translate(0, -hip.y);
+      }
+
+      if (this.selected) {
+        const rr = headR + 12;
+        const ry = head.y - headR - 8;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(head.x, ry, rr, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(247, 246, 242, 0.68)';
+        ctx.lineWidth = this.primary ? 5 : 4;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(head.x, ry, rr, 0, Math.PI * 2);
+        ctx.strokeStyle = this.primary ? 'rgba(27, 26, 23, 0.75)' : 'rgba(27, 26, 23, 0.32)';
+        ctx.lineWidth = this.primary ? 2 : 1.5;
+        ctx.setLineDash(this.primary ? [4, 3] : [3, 4]);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = this.color;
+      ctx.lineWidth = 3.5;
+
+      function strokeLimb(pts) {
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        ctx.lineTo(pts[1].x, pts[1].y);
+        ctx.lineTo(pts[2].x, pts[2].y);
+        ctx.stroke();
+      }
+
+      strokeLimb(legL);
+      strokeLimb(legR);
+      strokeLimb(armL);
+      strokeLimb(armR);
+
+      ctx.beginPath();
+      ctx.moveTo(hip.x, hip.y);
+      ctx.lineTo(neck.x, neck.y);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(head.x, head.y, headR, 0, Math.PI * 2);
+      ctx.arc(head.x, head.y, this.eyeR, 0, Math.PI * 2, true);
+      ctx.fillStyle = this.color;
+      ctx.fill('evenodd');
+
+      if (this.hasPower) {
+        const pulse = 1 + Math.sin(performance.now() / 300) * 0.08;
+        const by = head.y - headR - (this.selected ? 45 : 22);
+        ctx.save();
+        ctx.translate(head.x, by);
+        ctx.scale(pulse, pulse);
+        ctx.globalAlpha = this.powerCd > 0 ? 0.35 : 1;
+        ctx.beginPath();
+        ctx.moveTo(3, -9);
+        ctx.lineTo(-4, 1);
+        ctx.lineTo(-0.5, 1);
+        ctx.lineTo(-3, 9);
+        ctx.lineTo(4, -1);
+        ctx.lineTo(0.5, -1);
+        ctx.closePath();
+        ctx.fillStyle = '#ffc107';
+        ctx.fill();
+        ctx.strokeStyle = '#5d4037';
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      ctx.restore();
+    }
+
+    hit(px, py) {
+      const dx = px - this.x;
+      const dy = py - this.y;
+      const pose = this.pose();
+      const hx = this.x + pose.head.x;
+      const hy = this.y + pose.head.y;
+      const headHit = Math.hypot(px - hx, py - hy) < pose.headR + 8;
+      if (headHit) return true;
+      const crawling = this.behavior === 'crawl' && !this.dragging && !this.fighting;
+      if (crawling) {
+        const df = dx * this.facing;
+        if (df > -45 && df < 72 && dy > -45 && dy < 8) return true;
+      } else if (Math.abs(dx) < 28 && dy > -100 && dy < 8) return true;
+      const fl = pose.legL[2], fr = pose.legR[2];
+      if (Math.hypot(px - (this.x + fl.x), py - (this.y + fl.y)) < 14) return true;
+      if (Math.hypot(px - (this.x + fr.x), py - (this.y + fr.y)) < 14) return true;
+      return false;
+    }
+
+    bounds() {
+      const p = this.pose();
+      const pts = [p.head, p.neck, p.hip, ...p.armL, ...p.armR, ...p.legL, ...p.legR];
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      for (const pt of pts) {
+        if (pt.x < x0) x0 = pt.x;
+        if (pt.x > x1) x1 = pt.x;
+        if (pt.y < y0) y0 = pt.y;
+        if (pt.y > y1) y1 = pt.y;
+      }
+      const pad = 10;
+      return {
+        x0: this.x + x0 - pad, x1: this.x + x1 + pad,
+        y0: this.y + y0 - pad, y1: this.y + y1 + pad,
+      };
+    }
+  }
+
+  function addFigure(x, y, color) {
+    const f = new StickFigure(x, y, color);
+    figures.push(f);
+    select(f);
+    return f;
+  }
+
+  function selectionList() {
+    return figures.filter(f => f.selected);
+  }
+
+  function refreshPrimary() {
+    for (const o of figures) o.primary = o === selected;
+  }
+
+  function select(f) {
+    for (const o of figures) o.selected = o === f;
+    selected = f || null;
+    refreshPrimary();
+    updateUI();
+  }
+
+  function toggleSelect(f) {
+    f.selected = !f.selected;
+    if (f.selected) selected = f;
+    else if (selected === f) selected = selectionList()[0] || null;
+    refreshPrimary();
+    updateUI();
+  }
+
+  function selectMany(list, additive) {
+    if (!additive) for (const o of figures) o.selected = false;
+    for (const f of list) f.selected = true;
+    if (list.length) selected = list[list.length - 1];
+    else if (!additive) selected = null;
+    refreshPrimary();
+    updateUI();
+  }
+
+  function updateUI() {
+    const sel = selectionList();
+    if (selected && !selected.selected) selected = sel.length ? sel[sel.length - 1] : null;
+    if (!selected && sel.length) selected = sel[sel.length - 1];
+    const has = !!selected;
+    const multi = sel.length > 1;
+    const powerBtn = actionButtons.find(b => b.dataset.action === 'power');
+    for (const btn of actionButtons) {
+      btn.disabled = !has;
+      let on = false;
+      if (btn.dataset.action === 'fight') {
+        on = has && selected.fighting;
+        btn.disabled = !has || selected.blown;
+      } else if (btn.dataset.action === 'power') {
+        const holder = has && selected.hasPower;
+        btn.disabled = !has || selected.blown || (holder && selected.powerCd > 0);
+        on = holder;
+        btn.textContent = holder ? 'Superpower' : 'Give Power';
+        btn.title = holder
+          ? 'Blast the nearest figure into the wall (4s cooldown)'
+          : 'Grant this figure the superpower';
+      } else {
+        on = has && sel.every(f => !f.fighting && f.behavior === btn.dataset.action);
+      }
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+
+    if (powerBtn) {
+      const cd = has && selected.hasPower && selected.powerCd > 0
+        ? Math.min(1, selected.powerCd / 4) : 0;
+      powerBtn.style.setProperty('--cd', cd.toFixed(3));
+    }
+
+    selSwatch.hidden = !has;
+    if (has) selSwatch.style.background = selected.color;
+    powerGlyph.className = '';
+    if (has && selected.hasPower) {
+      powerGlyph.className = selected.powerCd > 0 ? 'recharging' : 'charged';
+      powerGlyph.title = selected.powerCd > 0 ? 'Superpower recharging' : 'Superpower ready';
+    } else {
+      powerGlyph.title = '';
+    }
+    revokeBtn.hidden = !(has && selected.hasPower);
+
+    const flashing = performance.now() < statusFlash.until;
+    if (!has) {
+      if (flashing) {
+        statusEl.textContent = statusFlash.text;
+      } else {
+        statusEl.textContent = figures.length
+          ? 'Click a figure to select'
+          : 'Add a figure to start';
+      }
+      colorPicker.disabled = true;
+    } else {
+      if (flashing) {
+        statusEl.textContent = statusFlash.text;
+      } else {
+        let mode;
+        if (sel.some(f => f.fighting)) {
+          mode = sel.every(f => f.fighting) ? 'dueling' : 'mixed';
+        } else {
+          const behaviors = new Set(sel.map(f => f.behavior));
+          mode = behaviors.size === 1 ? sel[0].behavior : 'mixed';
+        }
+        const suffix = sel.some(f => f.dragging) ? ' · drag' : '';
+        statusEl.textContent = multi
+          ? `${sel.length} selected · ${mode}${suffix}`
+          : `Selected · ${mode}${suffix}`;
+      }
+      colorPicker.disabled = false;
+      colorPicker.value = rgbToHex(selected.color);
+    }
+  }
+
+  function rgbToHex(c) {
+    if (c.startsWith('#')) {
+      if (c.length === 4) return '#' + [...c.slice(1)].map(ch => ch + ch).join('');
+      return c;
+    }
+    const m = c.match(/\d+/g);
+    if (!m) return '#e53935';
+    return '#' + m.slice(0, 3).map(n => (+n).toString(16).padStart(2, '0')).join('');
+  }
+
+  addBtn.addEventListener('click', () => {
+    const margin = 60;
+    const x = margin + Math.random() * Math.max(1, W - margin * 2);
+    addFigure(x, H - 70, colorPicker.value);
+  });
+
+  colorPicker.addEventListener('input', () => {
+    for (const f of selectionList()) f.color = colorPicker.value;
+  });
+
+  if (sceneSelect) {
+    sceneSelect.value = sceneId;
+    sceneSelect.addEventListener('change', () => setScene(sceneSelect.value));
+  }
+  document.body.dataset.scene = sceneId;
+
+  for (const btn of actionButtons) {
+    btn.addEventListener('click', () => {
+      if (!selected) return;
+      if (btn.dataset.action === 'power') {
+        if (selected.blown) return;
+        if (!selected.hasPower) {
+          selected.hasPower = true;
+          flashStatus('Superpower granted! Click again to blast', 2200);
+        } else if (selected.powerCd > 0) {
+          flashStatus('Superpower recharging…');
+        } else {
+          let target = null, best = Infinity;
+          for (const f of figures) {
+            if (f === selected || f.selected || f.dragging || f.blown) continue;
+            const d = Math.abs(f.x - selected.x);
+            if (d < best) { best = d; target = f; }
+          }
+          if (!target) {
+            flashStatus('No one to blast');
+          } else {
+            blastFigure(selected, target, 4);
+          }
+        }
+      } else if (btn.dataset.action === 'fight') {
+        if (selected.fighting) {
+          endDuel(selected);
+        } else {
+          const enemies = figures.filter(f =>
+            f !== selected && selected.isEnemy(f) && !f.fighting && !f.blown && !f.dragging);
+          if (!enemies.length) {
+            flashStatus('No enemy to fight — add a figure of another color', 1800);
+            return;
+          }
+          let nearest = enemies[0];
+          let best = Math.abs(nearest.x - selected.x);
+          for (const e of enemies) {
+            const d = Math.abs(e.x - selected.x);
+            if (d < best) { best = d; nearest = e; }
+          }
+          startDuel(selected, nearest);
+        }
+      } else {
+        for (const f of selectionList()) {
+          if (f.fighting) endDuel(f);
+          f.setBehavior(btn.dataset.action);
+          f.think = 4 + Math.random() * 4;
+        }
+      }
+      updateUI();
+    });
+  }
+
+  revokeBtn.addEventListener('click', () => {
+    if (!selected || !selected.hasPower) return;
+    selected.hasPower = false;
+    selected.powerCd = 0;
+    flashStatus('Superpower removed', 1600);
+    updateUI();
+  });
+
+  const KEY_ACTIONS = {
+    '1': 'idle', '2': 'crawl', '3': 'walk', '4': 'run', '5': 'jump',
+    f: 'fight', p: 'power',
+  };
+  document.addEventListener('keydown', e => {
+    if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+    const key = e.key.toLowerCase();
+    if (key === 'a') {
+      e.preventDefault();
+      addBtn.click();
+      return;
+    }
+    if (key === 'r') {
+      if (!revokeBtn.hidden) {
+        e.preventDefault();
+        revokeBtn.click();
+      }
+      return;
+    }
+    const action = KEY_ACTIONS[key];
+    if (!action) return;
+    const btn = actionButtons.find(b => b.dataset.action === action);
+    if (btn && !btn.disabled) {
+      e.preventDefault();
+      btn.click();
+    }
+  });
+
+  function pointerPos(e) {
+    const r = canvas.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  }
+
+  canvas.addEventListener('pointerdown', e => {
+    const { x, y } = pointerPos(e);
+    const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+    let hitFig = null;
+    for (let i = figures.length - 1; i >= 0; i--) {
+      if (figures[i].hit(x, y)) { hitFig = figures[i]; break; }
+    }
+    if (hitFig) {
+      if (hitFig.blown) {
+        hitFig.blown = null;
+        hitFig.vy = 0;
+        hitFig.bodyScale = 1;
+      }
+      if (additive) {
+        toggleSelect(hitFig);
+        return;
+      }
+      if (!hitFig.selected) select(hitFig);
+      else {
+        selected = hitFig;
+        refreshPrimary();
+        updateUI();
+      }
+      const group = selectionList();
+      for (const f of group) f.dragging = true;
+      drag = { moved: false, sx: x, sy: y, items: group.map(f => ({ f, x: f.x, y: f.y })) };
+      canvas.setPointerCapture(e.pointerId);
+      canvas.style.cursor = 'grabbing';
+      updateUI();
+    } else {
+      marquee = { x0: x, y0: y, x1: x, y1: y, add: additive, moved: false };
+      canvas.setPointerCapture(e.pointerId);
+      canvas.style.cursor = 'crosshair';
+    }
+  });
+
+  canvas.addEventListener('pointermove', e => {
+    const { x, y } = pointerPos(e);
+    if (drag) {
+      const dx = x - drag.sx;
+      const dy = y - drag.sy;
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) drag.moved = true;
+      for (const it of drag.items) {
+        it.f.x = clamp(it.x + dx, 30, W - 30);
+        it.f.y = clamp(it.y + dy, 20, H - 10);
+        it.f.vy = 0;
+      }
+      return;
+    }
+    if (marquee) {
+      marquee.x1 = x;
+      marquee.y1 = y;
+      if (Math.abs(x - marquee.x0) > 3 || Math.abs(y - marquee.y0) > 3) marquee.moved = true;
+      return;
+    }
+    let hovering = false;
+    for (const f of figures) {
+      if (f.hit(x, y)) { hovering = true; break; }
+    }
+    canvas.style.cursor = hovering ? 'grab' : 'default';
+  });
+
+  function endDrag(e) {
+    if (drag) {
+      for (const it of drag.items) {
+        it.f.dragging = false;
+        it.f.vy = 0;
+      }
+      drag = null;
+      canvas.style.cursor = 'default';
+      updateUI();
+      return;
+    }
+    if (marquee) {
+      const m = marquee;
+      marquee = null;
+      canvas.style.cursor = 'default';
+      const x0 = Math.min(m.x0, m.x1);
+      const x1 = Math.max(m.x0, m.x1);
+      const y0 = Math.min(m.y0, m.y1);
+      const y1 = Math.max(m.y0, m.y1);
+      if (m.moved && x1 - x0 > 6 && y1 - y0 > 6) {
+        const picked = figures.filter(f => {
+          const b = f.bounds();
+          return !(x1 < b.x0 || x0 > b.x1 || y1 < b.y0 || y0 > b.y1);
+        });
+        selectMany(picked, m.add);
+      } else if (!m.add) {
+        select(null);
+      }
+      updateUI();
+    }
+  }
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
+
+  addFigure(W / 2, H - 70, '#e53935');
+
+  let last = performance.now();
+
+  function frame(now) {
+    const rdt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    const groundY = H - 70;
+
+    let dt = rdt;
+    if (freezeT > 0) {
+      freezeT -= rdt;
+      dt = 0;
+    }
+
+    if (dt > 0) {
+      for (const f of figures) f.update(dt, groundY);
+      updateEffects(dt);
+    }
+
+    if (sceneDirty) renderScene();
+    ctx.drawImage(sceneCanvas, 0, 0, W, H);
+
+    if (shakeAmt > 0.4) {
+      ctx.save();
+      ctx.translate((Math.random() - 0.5) * shakeAmt, (Math.random() - 0.5) * shakeAmt);
+    }
+
+    for (const f of figures) f.draw(ctx);
+
+    if (marquee && marquee.moved) {
+      const mx0 = Math.min(marquee.x0, marquee.x1);
+      const my0 = Math.min(marquee.y0, marquee.y1);
+      const mw = Math.abs(marquee.x1 - marquee.x0);
+      const mh = Math.abs(marquee.y1 - marquee.y0);
+      ctx.save();
+      ctx.fillStyle = 'rgba(27, 26, 23, 0.05)';
+      ctx.fillRect(mx0, my0, mw, mh);
+      ctx.strokeStyle = 'rgba(27, 26, 23, 0.55)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 4]);
+      ctx.strokeRect(mx0 + 0.5, my0 + 0.5, mw, mh);
+      ctx.restore();
+    }
+
+    drawEffects();
+
+    if (shakeAmt > 0.4) {
+      ctx.restore();
+      shakeAmt *= Math.pow(0.0005, rdt);
+    } else {
+      shakeAmt = 0;
+    }
+
+    updateUI();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();

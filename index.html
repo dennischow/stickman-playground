@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stickman Playground</title>
+<link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+<div id="toolbar">
+  <div id="controls">
+    <div class="group">
+      <span class="group-label">Figure</span>
+      <button id="addBtn" type="button" title="Add a stick figure">Add</button>
+      <label class="color-label" title="Color of new and selected figures"><span class="color-text">Color</span>
+        <input id="colorPicker" type="color" value="#e53935">
+      </label>
+      <label class="auton-label" title="Figures randomly switch actions on their own">
+        <input id="autonChk" type="checkbox" checked> <span class="auton-full">Autonomous</span><span class="auton-short">Auto</span>
+      </label>
+    </div>
+    <div class="sep"></div>
+    <div class="group" id="sceneGroup">
+      <span class="group-label">Scene</span>
+      <select id="sceneSelect" aria-label="Background scene">
+        <option value="paper">Paper</option>
+        <option value="lake">Lake</option>
+        <option value="factory">Factory</option>
+        <option value="bridge">Bridge</option>
+        <option value="highway">Highway</option>
+        <option value="island">Island</option>
+      </select>
+    </div>
+    <div class="sep"></div>
+    <div class="group" id="actionGroup">
+      <span class="group-label">Motion</span>
+      <button type="button" data-action="idle" aria-pressed="false">Idle</button>
+      <button type="button" data-action="crawl" aria-pressed="false">Crawl</button>
+      <button type="button" data-action="walk" aria-pressed="false">Walk</button>
+      <button type="button" data-action="run" aria-pressed="false">Run</button>
+      <button type="button" data-action="jump" aria-pressed="false">Jump</button>
+    </div>
+    <div class="sep"></div>
+    <div class="group" id="combatGroup">
+      <span class="group-label">Combat</span>
+      <button type="button" data-action="fight" aria-pressed="false" title="Fight nearest enemy of another color">Kung Fu</button>
+      <button type="button" data-action="power" title="Grant the power, then blast the nearest figure into the wall">Give Power</button>
+      <button id="revokeBtn" type="button" hidden title="Remove the superpower from the selected figure">Revoke</button>
+    </div>
+  </div>
+  <div id="readout" aria-live="polite">
+    <span id="selSwatch" hidden></span>
+    <span id="readoutText">Add a stick figure to get started</span>
+    <span id="powerGlyph" title="Superpower"></span>
+  </div>
+</div>
+<div id="hint">drag to move · shift-click or box-select · 1–5 motion · F fight · P power · R revoke · A add</div>
+<canvas id="c"></canvas>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
+
