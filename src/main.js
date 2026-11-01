@@ -154,6 +154,10 @@ import { audio } from './audio.js';
 
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const lerp = (a, b, t) => a + (b - a) * t;
+  const smoothstep = (a, b, v) => {
+    const t = clamp((v - a) / (b - a), 0, 1);
+    return t * t * (3 - 2 * t);
+  };
   const easeOut = t => 1 - (1 - t) * (1 - t);
 
   const lerpPt = (a, b, t) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
@@ -387,7 +391,7 @@ import { audio } from './audio.js';
       this.trail = [];
       this.combat = {
         state: 'idle', t: 0, cd: 0.4 + Math.random() * 0.6,
-        hitDone: false, kbx: 0, spin: 0, hits: 0
+        hitDone: false, kbx: 0, spin: 0, hits: 0, snap: false, react: null, landed: false
       };
       this.hasPower = false;
       this.powerCd = 0;
@@ -411,7 +415,7 @@ import { audio } from './audio.js';
     resetCombat() {
       this.combat = {
         state: 'ready', t: 0, cd: 0.4 + Math.random() * 0.6,
-        hitDone: false, kbx: 0, spin: 0, hits: 0
+        hitDone: false, kbx: 0, spin: 0, hits: 0, snap: false, react: null, landed: false
       };
     }
 
@@ -433,7 +437,7 @@ import { audio } from './audio.js';
       this.fighting = false;
       this.foe = null;
       this.trail.length = 0;
-      this.combat = { state: 'idle', t: 0, cd: 0, hitDone: false, kbx: 0, spin: 0, hits: 0 };
+      this.combat = { state: 'idle', t: 0, cd: 0, hitDone: false, kbx: 0, spin: 0, hits: 0, snap: false, react: null, landed: false };
     }
 
     setBehavior(b) {
@@ -653,9 +657,13 @@ import { audio } from './audio.js';
         this.prevPose = this._lastPose;
         this._poseKey = key;
         this.blendT = 0;
-        this.blendDur = 0.14;
-        if (/knockdown|getup|launched/.test(key)) this.blendDur = 0.18;
-        else if (/punch|kick|combo|sweep|uppercut/.test(key)) this.blendDur = 0.09;
+        const snap = this.combat.snap;
+        this.combat.snap = false;
+        this.blendDur = snap ? 0.045 : 0.14;
+        if (!snap) {
+          if (/knockdown|getup|launched/.test(key)) this.blendDur = 0.18;
+          else if (/punch|kick|combo|sweep|uppercut/.test(key)) this.blendDur = 0.09;
+        }
         if (!this.prevPose) this.blendT = 1;
       }
       if (this.blendT < 1) {
@@ -687,11 +695,18 @@ import { audio } from './audio.js';
       const midX = (this.x + enemy.x) / 2;
       const hitY = this.y - 55;
       const knocked = opts.guaranteedKd || Math.random() < kdChance;
+      const reactStrength = clamp(0.5 + kbx / 320, 0.5, 1.3);
+      const reactKind = knocked || kbx >= 240 ? 'heavy' : kbx >= 150 || starScale >= 1.2 ? 'kick' : 'punch';
       if (knocked) {
         enemy.combat.state = 'knockdown';
         enemy.combat.t = 0.85;
+        enemy.combat.reactDur = 0.85;
+        enemy.combat.react = { kind: reactKind, strength: reactStrength + 0.15, dir };
+        enemy.combat.snap = true;
         enemy.combat.spin = 0;
         enemy.combat.kbx = dir * Math.max(160, kbx);
+        enemy.combat.landed = false;
+        enemy.facing = dir > 0 ? -1 : 1;
         spawnDust(enemy.x, enemy.y, 7);
         spawnStar(midX, hitY, starScale * 1.3);
         shakeAmt = Math.max(shakeAmt, Math.max(shake, 9));
@@ -699,6 +714,9 @@ import { audio } from './audio.js';
       } else {
         enemy.combat.state = 'stagger';
         enemy.combat.t = 0.35;
+        enemy.combat.reactDur = 0.35;
+        enemy.combat.react = { kind: reactKind, strength: reactStrength, dir };
+        enemy.combat.snap = true;
         enemy.combat.spin = 0;
         enemy.combat.kbx = dir * kbx;
         spawnStar(midX, hitY, starScale);
@@ -708,8 +726,7 @@ import { audio } from './audio.js';
       spawnInk(midX, hitY, knocked ? 6 : 3);
       spawnRing(midX, hitY, clamp(0.7 + kbx / 300, 0.7, 1.7));
       if (knocked || kbx >= 240) inkFlash = Math.max(inkFlash, 0.32);
-      const kind = knocked || kbx >= 240 ? 'heavy' : kbx >= 150 || starScale >= 1.2 ? 'kick' : 'punch';
-      audio.hit(kind, clamp(0.75 + kbx / 420, 0.75, 1.35), panFor(midX));
+      audio.hit(reactKind, clamp(0.75 + kbx / 420, 0.75, 1.35), panFor(midX));
       if (knocked && kbx >= 240) audio.ko(panFor(enemy.x));
     }
 
@@ -724,7 +741,9 @@ import { audio } from './audio.js';
         }
       }
 
-      if (Math.abs(c.kbx) > 1) {
+      if (c.state === 'getup') {
+        c.kbx = 0;
+      } else if (Math.abs(c.kbx) > 1) {
         this.x += c.kbx * dt;
         c.kbx *= Math.pow(0.001, dt);
       } else c.kbx = 0;
@@ -745,7 +764,8 @@ import { audio } from './audio.js';
 
       const dx = enemy.x - this.x;
       const dist = Math.abs(dx);
-      if (dist > 4) this.facing = dx > 0 ? 1 : -1;
+      const facingFrozen = c.state === 'knockdown' || c.state === 'getup' || c.state === 'launched';
+      if (dist > 4 && !facingFrozen) this.facing = dx > 0 ? 1 : -1;
 
       const downStates = ['knockdown', 'getup', 'launched', 'stagger'];
       if (dist < 26 && !downStates.includes(c.state) && !downStates.includes(enemy.combat.state)) {
@@ -783,12 +803,21 @@ import { audio } from './audio.js';
           spawnDust(this.x, this.y, 4);
           c.state = 'stagger';
           c.t = 0.25;
+          c.reactDur = 0.25;
         }
         return;
       }
 
       if (c.state === 'knockdown') {
         if (airborne) return;
+        const elapsed = 0.85 - c.t;
+        if (!c.landed && elapsed >= 0.24) {
+          c.landed = true;
+          c.kbx *= 0.18;
+          spawnDust(this.x, this.y, 6);
+          audio.land(panFor(this.x), true);
+          shakeAmt = Math.max(shakeAmt, 3);
+        }
         if (c.t <= 0) {
           c.state = 'getup';
           c.t = 0.45;
@@ -797,11 +826,6 @@ import { audio } from './audio.js';
       }
 
       if (c.state === 'getup') {
-        const elapsed = 0.45 - c.t;
-        if (elapsed > 0.3 && this.vy === 0 && this.y >= groundY - 0.5) {
-          this.vy = -170;
-          spawnDust(this.x, this.y, 3);
-        }
         if (c.t <= 0) { c.state = 'ready'; c.cd = 0.35 + Math.random() * 0.4; }
         return;
       }
@@ -918,6 +942,9 @@ import { audio } from './audio.js';
             if (enemy.combat.state === 'stagger') {
               enemy.combat.state = 'launched';
               enemy.combat.t = 0.6;
+              enemy.combat.react = { kind: 'heavy', strength: 1.35, dir: enemy.x >= this.x ? 1 : -1 };
+              enemy.combat.snap = true;
+              enemy.facing = enemy.x >= this.x ? -1 : 1;
               enemy.vy = -300;
             }
           }
@@ -1057,6 +1084,7 @@ import { audio } from './audio.js';
       const hipY = (crawling ? -14 : -38) * s;
 
       let lean = 0;
+      let reactHold = 0, reactSettle = 0, reactWobble = 0;
       if (b === 'run') lean = 0.38 * f;
       else if (b === 'walk') lean = 0.06 * f;
       else if (b === 'crawl') lean = 1.4 * f;
@@ -1068,16 +1096,30 @@ import { audio } from './audio.js';
         if (cs === 'punch') lean = 0.2 * f;
         else if (cs === 'kick') lean = -0.12 * f;
         else if (cs === 'block') lean = -0.06 * f;
-        else if (cs === 'stagger') lean = -0.32 * f;
+        else if (cs === 'stagger') {
+          const dur = this.combat.reactDur || 0.35;
+          const rt = clamp(1 - this.combat.t / dur, 0, 1);
+          const strength = this.combat.react ? this.combat.react.strength : 1;
+          reactHold = smoothstep(0, 0.2, rt) * (1 - smoothstep(0.6, 1, rt));
+          reactSettle = smoothstep(0.6, 1, rt);
+          reactWobble = reduceMotion ? 0 : Math.sin(rt * 26) * 0.07 * (1 - rt);
+          lean = -(0.2 + 0.17 * strength) * reactHold * f;
+        }
+        else if (cs === 'knockdown') {
+          const dur = this.combat.reactDur || 0.85;
+          const rt = clamp(1 - this.combat.t / dur, 0, 1);
+          const strength = this.combat.react ? this.combat.react.strength : 1;
+          reactHold = 1 - smoothstep(0.15, 0.45, rt);
+          lean = -(0.2 + 0.17 * strength) * reactHold * f;
+        }
         else if (cs === 'dodge') lean = -0.18 * f;
         else if (cs === 'flyingkick') lean = 0.45 * f;
         else if (cs === 'spinkick') lean = 0.15 * f;
         else if (cs === 'sweep') lean = 0.5 * f;
         else if (cs === 'uppercut') lean = 0.08 * f;
         else if (cs === 'combo') lean = 0.18 * f;
-        else if (cs === 'knockdown') lean = -1.35 * f;
-        else if (cs === 'launched') lean = -0.5 * f;
-        else if (cs === 'getup') lean = 0.3 * f;
+        else if (cs === 'launched') lean = -0.35 * f;
+        else if (cs === 'getup') lean = 0.1 * f;
         else lean = 0.1 * f;
       }
 
@@ -1089,31 +1131,63 @@ import { audio } from './audio.js';
 
       let hip, neck, head;
       const fightingPose = this.fighting && !this.dragging;
-      const blownDown = !!this.blown && this.blown.phase === 'down';
-      const knockedLying = blownDown ||
-        (fightingPose && this.combat.state === 'knockdown' && this.y >= H - 72);
+      const combatState = fightingPose ? this.combat.state : '';
+      let down = 0;
+      let downElapsed = 0;
+      let settle = 0;
 
-      if (knockedLying) {
-        hip = { x: -6 * f, y: -8 };
-        neck = { x: -38 * f, y: -6 };
-        head = { x: -54 * f, y: -10 };
-      } else {
-        hip = { x: 0, y: hipY - bounce };
-        const neckLocal = rot(0, -34 * s, lean);
-        neck = { x: hip.x + neckLocal.x, y: hip.y + neckLocal.y };
-        head = crawling
-          ? { x: neck.x + f * (headR + 5), y: neck.y - 3 * s }
-          : { x: neck.x, y: neck.y - headR - 6 };
+      if (this.blown) {
+        if (this.blown.phase === 'down') down = 1;
+        else if (this.blown.phase === 'getup') {
+          downElapsed = clamp((0.4 - this.blown.t) / 0.4, 0, 1);
+          down = 1 - smoothstep(0.12, 0.92, downElapsed);
+        }
+      } else if (combatState === 'knockdown') {
+        downElapsed = clamp(0.85 - this.combat.t, 0, 0.85);
+        down = smoothstep(0.02, 0.24, downElapsed);
+        if (downElapsed > 0.24) {
+          settle = Math.exp(-(downElapsed - 0.24) * 9) * Math.sin((downElapsed - 0.24) * 34) * 1.6;
+        }
+      } else if (combatState === 'getup') {
+        downElapsed = clamp(0.45 - this.combat.t, 0, 0.45);
+        down = 1 - smoothstep(0.10, 0.44, downElapsed);
+      }
+
+      const breath = combatState === 'knockdown' && down > 0.9
+        ? Math.sin(downElapsed * 7) * 0.6 : 0;
+
+      hip = { x: 0, y: hipY - bounce };
+      if (reactHold > 0) {
+        hip.x -= f * (2 + 6 * reactHold);
+        hip.y += 1 + 4 * reactHold;
+      }
+      const neckLocal = rot(0, -34 * s, lean);
+      neck = { x: hip.x + neckLocal.x, y: hip.y + neckLocal.y };
+      head = crawling
+        ? { x: neck.x + f * (headR + 5), y: neck.y - 3 * s }
+        : { x: neck.x, y: neck.y - headR - 6 };
+      if (reactHold > 0) {
+        head.x -= f * (2 + 5 * reactHold);
+        head.y += 1.5 * reactHold + 1.5 * reactSettle;
+      }
+
+      if (down > 0) {
+        const lieAngle = -1.5 * f;
+        const lieHip = { x: -6 * f, y: -10 * s + breath };
+        const lieNeckLocal = rot(0, -34 * s, lieAngle);
+        const lieNeck = { x: lieHip.x + lieNeckLocal.x, y: lieHip.y + lieNeckLocal.y };
+        const lieHeadLocal = rot(0, -(headR + 6), lieAngle);
+        const lieHead = { x: lieNeck.x + lieHeadLocal.x, y: lieNeck.y + lieHeadLocal.y };
+        hip = lerpPt(hip, lieHip, down);
+        neck = lerpPt(neck, lieNeck, down);
+        head = lerpPt(head, lieHead, down);
+        hip.y += settle * down;
+        head.y += settle * 0.6 * down;
       }
 
       let la, ra, la2, ra2, lHip, rHip, lKnee, rKnee;
 
-      if (knockedLying) {
-        la = -1.1 + Math.sin(p * 6) * 0.15; la2 = 0.7;
-        ra = -0.9 - Math.sin(p * 6) * 0.15; ra2 = 0.6;
-        lHip = 0.8; rHip = 0.55;
-        lKnee = -1.1; rKnee = -0.85;
-      } else if (this.blown && (this.blown.phase === 'fly' || this.blown.phase === 'fall')) {
+      if (this.blown && (this.blown.phase === 'fly' || this.blown.phase === 'fall')) {
         const w = Math.sin(p * 16);
         la = -1.2 + w * 0.5; la2 = 0.55;
         ra = -1.0 - w * 0.5; ra2 = 0.5;
@@ -1206,27 +1280,41 @@ import { audio } from './audio.js';
           la = 0.65; la2 = 1.45;
           ra = 0.75; ra2 = 1.4;
         } else if (cs === 'stagger') {
-          la = -1.3 + Math.sin(p * 14) * 0.35; la2 = 0.5;
-          ra = -1.1 - Math.sin(p * 14) * 0.35; ra2 = 0.4;
-          lHip = 0.2; rHip = -0.55;
-          lKnee = -0.2; rKnee = -0.45;
+          const dur = this.combat.reactDur || 0.35;
+          const rt = clamp(1 - this.combat.t / dur, 0, 1);
+          const stepLift = Math.sin(Math.PI * clamp(rt / 0.55, 0, 1)) * reactHold;
+          la = lerp(0.9, 1.45, reactHold) + reactWobble;
+          la2 = lerp(-0.5, 1.25, reactHold);
+          ra = lerp(-0.4, -0.88, reactHold) - reactWobble;
+          ra2 = lerp(1.5, 0.5, reactHold);
+          lHip = lerp(0.45, 0.6, reactHold);
+          rHip = lerp(-0.35, -0.85, reactHold) - 0.1 * stepLift;
+          lKnee = lerp(-0.55, -0.45, reactHold);
+          rKnee = lerp(-0.25, -0.35, reactHold) - 0.35 * stepLift;
         } else if (cs === 'launched') {
-          la = -1.4 + Math.sin(p * 16) * 0.4; la2 = 0.6;
-          ra = -1.2 - Math.sin(p * 16) * 0.4; ra2 = 0.5;
-          lHip = 0.7; rHip = 0.3;
-          lKnee = -0.9; rKnee = -0.6;
+          const w = Math.sin(p * 16) * 0.3;
+          la = -0.95 + w; la2 = 0.85;
+          ra = -0.7 - w; ra2 = 0.65;
+          lHip = 0.45 + w * 0.2; rHip = -0.25 - w * 0.2;
+          lKnee = -0.75; rKnee = 0.85;
         } else if (cs === 'getup') {
           const elapsed = 0.45 - this.combat.t;
-          if (elapsed < 0.28) {
-            la = 0.7; la2 = 0.55;
-            ra = 0.75; ra2 = 0.5;
-            lHip = 0.95; rHip = 0.9;
-            lKnee = 0.55 - lHip; rKnee = 0.5 - rHip;
+          if (elapsed < 0.16) {
+            la = 0.5; la2 = 0.25;
+            ra = 0.55; ra2 = 0.2;
+            lHip = 1.0; rHip = 0.9;
+            lKnee = 0.6 - lHip; rKnee = 0.5 - rHip;
+          } else if (elapsed < 0.3) {
+            const k = smoothstep(0.16, 0.3, elapsed);
+            la = lerp(0.5, 0.18, k); la2 = lerp(0.25, 0.45, k);
+            ra = lerp(0.55, 0.2, k); ra2 = lerp(0.2, 0.4, k);
+            lHip = lerp(1.0, 0.45, k); rHip = lerp(0.9, 0.3, k);
+            lKnee = lerp(0.6 - 1.0, -0.35, k); rKnee = lerp(0.5 - 0.9, -0.25, k);
           } else {
-            la = 0.2; la2 = 0.35;
-            ra = 0.25; ra2 = 0.3;
-            lHip = 0.25; rHip = 0.15;
-            lKnee = -0.3; rKnee = -0.2;
+            la = 0.18; la2 = 0.45;
+            ra = 0.2; ra2 = 0.4;
+            lHip = 0.3; rHip = 0.18;
+            lKnee = -0.3; rKnee = -0.22;
           }
         } else {
           la = 0.9 + bob; la2 = -0.5;
@@ -1309,6 +1397,25 @@ import { audio } from './audio.js';
         lKnee = -0.25; rKnee = -0.15;
       }
 
+      if (down > 0) {
+        const lieLa = -1.35, lieLa2 = -0.1;
+        const lieRa = -1.5, lieRa2 = 0.35;
+        const lieLHip = 1.55, lieLKnee = -0.05;
+        const lieRHip = 1.25, lieRKnee = 0.95;
+        la = lerp(la, lieLa, down);
+        la2 = lerp(la2, lieLa2, down);
+        ra = lerp(ra, lieRa, down);
+        ra2 = lerp(ra2, lieRa2, down);
+        lHip = lerp(lHip, lieLHip, down);
+        lKnee = lerp(lKnee, lieLKnee, down);
+        rHip = lerp(rHip, lieRHip, down);
+        rKnee = lerp(rKnee, lieRKnee, down);
+        if (combatState === 'knockdown') {
+          const flail = Math.sin(downElapsed * 26) * 0.35 * down * (1 - down);
+          la += flail; ra -= flail;
+        }
+      }
+
       const upperArm = 24 * s, lowerArm = 22 * s;
       const upperLeg = 22 * s, lowerLeg = 22 * s;
 
@@ -1364,6 +1471,7 @@ import { audio } from './audio.js';
       if (this.fighting) {
         const cs = this.combat.state;
         if (cs === 'knockdown' || cs === 'launched' || cs === 'getup') return 'dizzy';
+        if (cs === 'stagger') return this.combat.t > 0.08 ? 'hurt' : 'focused';
         return 'focused';
       }
       if (this.behavior === 'run') return 'determined';
@@ -1414,6 +1522,12 @@ import { audio } from './audio.js';
         ctx.moveTo(head.x + r, head.y - r);
         ctx.lineTo(head.x - r, head.y + r);
         ctx.stroke();
+      } else if (mood === 'hurt') {
+        ctx.beginPath();
+        ctx.moveTo(head.x - eyeR, head.y - eyeR * 0.55);
+        ctx.lineTo(head.x + eyeR * 0.45, head.y);
+        ctx.lineTo(head.x - eyeR, head.y + eyeR * 0.55);
+        ctx.stroke();
       } else if (this.blinkT > 0) {
         ctx.beginPath();
         ctx.moveTo(head.x - eyeR, head.y);
@@ -1444,6 +1558,9 @@ import { audio } from './audio.js';
       } else if (mood === 'dizzy') {
         ctx.moveTo(bx - 4 * s * f, by);
         ctx.lineTo(bx + 4 * s * f, by + 1.5 * s);
+      } else if (mood === 'hurt') {
+        ctx.moveTo(bx - 5 * s * f, by + 1.8 * s);
+        ctx.lineTo(bx + 5 * s * f, by - 2.2 * s);
       }
       ctx.stroke();
 
@@ -1461,6 +1578,8 @@ import { audio } from './audio.js';
       } else if (mood === 'dizzy') {
         ctx.moveTo(mx - 3 * s * f, my);
         ctx.quadraticCurveTo(mx, my + 2.5 * s, mx + 3 * s * f, my);
+      } else if (mood === 'hurt') {
+        ctx.arc(mx, my + 0.4 * s, 2.2 * s, 0, Math.PI * 2);
       } else if (mood === 'braced') {
         ctx.moveTo(mx - 2 * s * f, my);
         ctx.lineTo(mx + 2 * s * f, my);
