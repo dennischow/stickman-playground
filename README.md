@@ -9,6 +9,7 @@ Built with vanilla JavaScript and the Canvas 2D API, bundled with Vite. No game 
 - **Procedural stick figures** — every pose is computed from limb angles, so motion is smooth and resolution-independent.
 - **Motion behaviors** — idle, walk, run, crawl, and a physically simulated jump with crouch, air, and landing phases.
 - **Individual movement** — each figure gets its own walk/run speed, jump height, crouch timing, and landing rest, so a crowd never moves in lockstep.
+- **Motion polish** — smoothed frame-to-frame velocity drives subtle head, torso, and arm lag; landings squash and settle; footsteps kick up dust; fast strikes leave short smear arcs. All of it respects `prefers-reduced-motion`.
 - **Autonomous mode** — figures randomly switch actions on their own, each with a randomized "think" timer.
 - **Kung-fu combat** — AI duels with approach, block, dodge, punch, kick, combo, spin kick, sweep, uppercut, flying kick, stagger, knockdown, launch, and get-up states. Hits use natural recoil poses and knockdowns fall, settle, and push back up continuously.
 - **Superpower** — grant a figure the power, then blast the nearest figure into the wall with knockback, slow-motion, impact typography, ink splats, and screen shake.
@@ -93,6 +94,8 @@ The scene is rendered once to an offscreen canvas on resize or scene change, so 
 `StickFigure` stores position, facing, behavior, animation phase, velocity, and combat state. Its `pose()` method blends limb angles per behavior or combat state, while `draw()` renders the skeleton, expressive face, motion-trail ghosts, selection ring, power glyph, speed lines, and ground shadow.
 
 Gravity is a constant `1500 px/s²`. Horizontal movement is driven by per-behavior speeds multiplied by a per-figure randomized `speedMul` (0.9–1.25), with facing flips at the screen margins. Voluntary jumps also vary in height (`jumpMul` 0.92–1.12), crouch duration, and landing rest. Faster runners lean slightly more and draw longer speed lines, so movement differences read clearly.
+
+Frame-to-frame position changes are smoothed into per-figure velocity and acceleration. Those values drive damped springs for the upper body, head, and hands (scaled down during authored attacks), add landing squash and settle, spawn small footstep dust puffs, and draw brief smear arcs on fast strikes. All of these are visual-only and are disabled or reduced when reduced motion is requested.
 
 ### Combat state machine
 

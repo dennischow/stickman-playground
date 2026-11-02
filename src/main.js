@@ -174,6 +174,18 @@ import { audio } from './audio.js';
   const easeOut = t => 1 - (1 - t) * (1 - t);
   const pick = list => list[Math.floor(Math.random() * list.length)];
 
+  const newSpring = () => ({ x: 0, y: 0, vx: 0, vy: 0 });
+  function stepSpring(s, tx, ty, stiffness, damping, dt, max) {
+    s.vx += ((tx - s.x) * stiffness - s.vx * damping) * dt;
+    s.vy += ((ty - s.y) * stiffness - s.vy * damping) * dt;
+    s.x += s.vx * dt;
+    s.y += s.vy * dt;
+    if (s.x > max) { s.x = max; if (s.vx > 0) s.vx *= 0.2; }
+    else if (s.x < -max) { s.x = -max; if (s.vx < 0) s.vx *= 0.2; }
+    if (s.y > max) { s.y = max; if (s.vy > 0) s.vy *= 0.2; }
+    else if (s.y < -max) { s.y = -max; if (s.vy < 0) s.vy *= 0.2; }
+  }
+
   const lerpPt = (a, b, t) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
   const lerpChain = (a, b, t) => a.map((p, i) => lerpPt(p, b[i], t));
   const panFor = x => clamp(((x / Math.max(1, W)) * 2 - 1) * 0.7, -0.7, 0.7);
@@ -284,6 +296,26 @@ import { audio } from './audio.js';
         spr: Math.floor(Math.random() * dustSprites.length),
         rot: Math.random() * Math.PI * 2,
         vr: (Math.random() - 0.5) * 2.2
+      });
+    }
+  }
+
+  function spawnStepDust(x, y, run, dir) {
+    if (reduceMotion) return;
+    const n = run ? 3 : 2;
+    for (let i = 0; i < n; i++) {
+      const back = 4 + Math.random() * (run ? 14 : 8);
+      effects.push({
+        type: 'dust',
+        x: x - dir * back,
+        y: y - Math.random() * 2,
+        vx: -dir * (18 + Math.random() * (run ? 42 : 24)),
+        vy: -6 - Math.random() * (run ? 22 : 12),
+        t: 0, life: 0.18 + Math.random() * 0.14,
+        r: (run ? 1.7 : 1.4) + Math.random() * 1.3,
+        spr: Math.floor(Math.random() * dustSprites.length),
+        rot: Math.random() * Math.PI * 2,
+        vr: (Math.random() - 0.5) * 2
       });
     }
   }
@@ -651,6 +683,17 @@ import { audio } from './audio.js';
       this._poseKey = '';
       this._stepPhase = Math.floor(this.phase / Math.PI);
       this._lastCombatState = 'idle';
+      this.velX = 0;
+      this.velY = 0;
+      this.accX = 0;
+      this.accY = 0;
+      this.landT = 0;
+      this._sec = {
+        upper: newSpring(),
+        head: newSpring(),
+        armL: newSpring(),
+        armR: newSpring()
+      };
     }
 
     isEnemy(o) {
@@ -717,8 +760,87 @@ import { audio } from './audio.js';
     }
 
     update(dt, groundY) {
+      if (this.landT > 0) this.landT = Math.max(0, this.landT - dt);
+      const px = this.x;
+      const py = this.y;
       this._update(dt, groundY);
       this._tickBlend(dt);
+      this._trackMotion(dt, px, py);
+      this._tickSecondary(dt);
+    }
+
+    _trackMotion(dt, px, py) {
+      if (dt <= 0) return;
+      if (this.dragging) {
+        this.velX = 0;
+        this.velY = 0;
+        this.accX = 0;
+        this.accY = 0;
+        return;
+      }
+      const rawVX = clamp((this.x - px) / dt, -1400, 1400);
+      const rawVY = clamp((this.y - py) / dt, -2400, 2400);
+      const k = 1 - Math.exp(-dt * 16);
+      const prevVX = this.velX;
+      const prevVY = this.velY;
+      this.velX += (rawVX - this.velX) * k;
+      this.velY += (rawVY - this.velY) * k;
+      const ak = 1 - Math.exp(-dt * 9);
+      this.accX += (clamp((this.velX - prevVX) / dt, -8000, 8000) - this.accX) * ak;
+      this.accY += (clamp((this.velY - prevVY) / dt, -14000, 14000) - this.accY) * ak;
+    }
+
+    _tickSecondary(dt) {
+      const step = Math.min(dt, 0.033);
+      if (reduceMotion) {
+        for (const s of Object.values(this._sec)) {
+          s.x = 0; s.y = 0; s.vx = 0; s.vy = 0;
+        }
+        return;
+      }
+      if (step <= 0) return;
+      const cs = this.fighting ? this.combat.state : '';
+      const attacking = /punch|kick|combo|sweep|uppercut/.test(cs);
+      const armScale = attacking ? 0.16 : 1;
+      const upperX = clamp(-this.accX * 0.005, -5.5, 5.5);
+      const upperY = clamp(-this.accY * 0.0018 - this.velY * 0.003, -4, 4);
+      const headX = clamp(-this.accX * 0.0034, -3.4, 3.4);
+      const headY = clamp(-this.accY * 0.0012 - this.velY * 0.002, -2.8, 2.8);
+      const armX = clamp((-this.accX * 0.0034 - this.velX * 0.006) * armScale, -5, 5);
+      const armY = clamp((-this.accY * 0.001 - this.velY * 0.003) * armScale, -4, 4);
+      const swing = Math.sin(this.phase) * 0.9 * armScale;
+      stepSpring(this._sec.upper, upperX, upperY, 135, 17, step, 6);
+      stepSpring(this._sec.head, headX, headY, 190, 19, step, 4);
+      stepSpring(this._sec.armL, armX + swing, armY, 95, 14, step, 6);
+      stepSpring(this._sec.armR, armX - swing, armY, 95, 14, step, 6);
+    }
+
+    _applySecondary(pose) {
+      if (reduceMotion || this.dragging) return pose;
+      const upper = this._sec.upper;
+      const headS = this._sec.head;
+      const armL = this._sec.armL;
+      const armR = this._sec.armR;
+      const dx = upper.x;
+      const dy = upper.y;
+      if (Math.abs(dx) + Math.abs(dy) + Math.abs(headS.x) + Math.abs(headS.y) +
+          Math.abs(armL.x) + Math.abs(armL.y) + Math.abs(armR.x) + Math.abs(armR.y) < 0.02) {
+        return pose;
+      }
+      const neck = { x: pose.neck.x + dx, y: pose.neck.y + dy };
+      const head = { x: pose.head.x + dx + headS.x, y: pose.head.y + dy + headS.y };
+      const shiftArm = (pts, a) => [
+        { x: neck.x, y: neck.y },
+        { x: pts[1].x + dx + a.x * 0.5, y: pts[1].y + dy + a.y * 0.5 },
+        { x: pts[2].x + dx + a.x, y: pts[2].y + dy + a.y }
+      ];
+      return {
+        ...pose,
+        neck,
+        head,
+        armL: shiftArm(pose.armL, armL),
+        armR: shiftArm(pose.armR, armR)
+      };
     }
 
     _update(dt, groundY) {
@@ -761,7 +883,8 @@ import { audio } from './audio.js';
             this.y = groundY;
             b.phase = 'down';
             b.t = 0.9;
-            spawnDust(this.x, this.y, 6);
+            this.landT = 0.4;
+            spawnDust(this.x, this.y, reduceMotion ? 4 : 8);
             spawnInk(this.x, this.y - 24, 3);
             spawnSplat(this.x, this.y, 1.1);
             shakeAmt = Math.max(shakeAmt, 8);
@@ -775,7 +898,8 @@ import { audio } from './audio.js';
             b.vy = 0;
             b.phase = 'down';
             b.t = 0.9;
-            spawnDust(this.x, this.y, 6);
+            this.landT = 0.4;
+            spawnDust(this.x, this.y, reduceMotion ? 4 : 8);
             spawnSplat(this.x, this.y, 1.1);
             shakeAmt = Math.max(shakeAmt, 8);
             audio.land(panFor(this.x), true);
@@ -831,9 +955,10 @@ import { audio } from './audio.js';
             this.y = groundY;
             this.vy = 0;
             this.bodyScale = 0.88;
+            this.landT = 0.4;
             this.restT = this.jumpRest;
             this.jumpT = 0;
-            spawnDust(this.x, this.y, 6);
+            spawnDust(this.x, this.y, reduceMotion ? 4 : 8);
             spawnSkid(this.x, this.y, this.facing);
             audio.land(panFor(this.x), false);
           }
@@ -878,7 +1003,9 @@ import { audio } from './audio.js';
         const stepIdx = Math.floor(this.phase / stride);
         if (stepIdx !== this._stepPhase) {
           this._stepPhase = stepIdx;
-          audio.step(panFor(this.x), this.behavior === 'run');
+          const running = this.behavior === 'run';
+          audio.step(panFor(this.x), running);
+          spawnStepDust(this.x, this.y, running, this.facing);
         }
         const margin = 50;
         if (this.x < margin) { this.x = margin; this.facing = 1; }
@@ -1063,7 +1190,8 @@ import { audio } from './audio.js';
 
       if (c.state === 'launched') {
         if (!airborne && c.t < 0.35) {
-          spawnDust(this.x, this.y, 4);
+          this.landT = 0.4;
+          spawnDust(this.x, this.y, reduceMotion ? 3 : 6);
           c.state = 'stagger';
           c.t = 0.25;
           c.reactDur = 0.25;
@@ -1077,7 +1205,8 @@ import { audio } from './audio.js';
         if (!c.landed && elapsed >= 0.24) {
           c.landed = true;
           c.kbx *= 0.18;
-          spawnDust(this.x, this.y, 6);
+          this.landT = 0.4;
+          spawnDust(this.x, this.y, reduceMotion ? 4 : 8);
           spawnInk(this.x, this.y - 12, 3);
           spawnSplat(this.x + this.facing * 8, this.y, 1.25);
           audio.land(panFor(this.x), true);
@@ -1141,7 +1270,8 @@ import { audio } from './audio.js';
           }
         }
         if (c.hitDone && !airborne && elapsed > 0.3) {
-          spawnDust(this.x, this.y, 5);
+          this.landT = 0.4;
+          spawnDust(this.x, this.y, reduceMotion ? 3 : 6);
           c.state = 'ready';
           c.cd = 0.5 + Math.random() * 0.4;
           c.hitDone = false;
@@ -1334,13 +1464,20 @@ import { audio } from './audio.js';
     pose() {
       const target = this.computePose();
       this._lastPose = target;
-      if (!this.prevPose || this.blendT >= 1) return target;
-      const t = this.blendT * this.blendT * (3 - 2 * this.blendT);
-      return blendPose(this.prevPose, target, t);
+      let result = target;
+      if (this.prevPose && this.blendT < 1) {
+        const t = this.blendT * this.blendT * (3 - 2 * this.blendT);
+        result = blendPose(this.prevPose, target, t);
+      }
+      return this._applySecondary(result);
     }
 
     computePose() {
-      const s = this.bodyScale;
+      const landElapsed = this.landT > 0 ? 0.4 - this.landT : 0;
+      const landWave = this.landT > 0
+        ? -0.045 * Math.exp(-landElapsed * 10) * Math.cos(landElapsed * 24)
+        : 0;
+      const s = this.bodyScale * (1 + landWave);
       const p = this.phase;
       const headR = this.headR * s;
       const f = this.facing;
@@ -1944,6 +2081,60 @@ import { audio } from './audio.js';
       ctx.restore();
     }
 
+    drawAttackArc(ctx, pose) {
+      if (reduceMotion) return;
+      const cs = this.fighting ? this.combat.state : '';
+      const totals = {
+        punch: 0.35, kick: 0.45, combo: 0.95,
+        sweep: 0.5, uppercut: 0.48, flyingkick: 0.85, spinkick: 0.55
+      };
+      const total = totals[cs];
+      if (!total) return;
+      const elapsed = total - this.combat.t;
+      let start, end, limb;
+      if (cs === 'combo') {
+        const step = this.combat.comboStep || 0;
+        if (step === 0) { start = 0.04; end = 0.22; limb = pose.armR; }
+        else if (step === 1) { start = 0.3; end = 0.46; limb = pose.armL; }
+        else { start = 0.58; end = 0.8; limb = pose.legL; }
+      } else if (cs === 'punch') {
+        start = 0.08; end = 0.23; limb = pose.armR;
+      } else if (cs === 'kick') {
+        start = 0.16; end = 0.32; limb = pose.legL;
+      } else if (cs === 'uppercut') {
+        start = 0.14; end = 0.3; limb = pose.armR;
+      } else if (cs === 'sweep') {
+        start = 0.12; end = 0.28; limb = pose.legL;
+      } else if (cs === 'flyingkick') {
+        start = 0.16; end = 0.5; limb = pose.legL;
+      } else {
+        start = 0.12; end = 0.4; limb = pose.legL;
+      }
+      const k = Math.sin(Math.PI * clamp((elapsed - start) / (end - start), 0, 1));
+      if (k <= 0.04) return;
+      const joint = limb[1];
+      const tip = limb[2];
+      const len = Math.hypot(tip.x - joint.x, tip.y - joint.y);
+      if (len < 8) return;
+      const base = Math.atan2(tip.y - joint.y, tip.x - joint.x);
+      const sweep = 0.9 * k;
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = this.color;
+      for (let i = 0; i < 3; i++) {
+        ctx.globalAlpha = (0.07 + i * 0.035) * k;
+        ctx.lineWidth = 11 - i * 3.5;
+        ctx.beginPath();
+        ctx.arc(
+          joint.x, joint.y, Math.max(6, len - i * 2),
+          base - sweep * 0.5 - i * 0.03,
+          base + sweep * 0.5 + i * 0.03
+        );
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     draw(ctx) {
       const pose = this._renderPose || this.pose();
       const { head, neck, hip, armL, armR, legL, legR, headR } = pose;
@@ -1994,6 +2185,8 @@ import { audio } from './audio.js';
         ctx.rotate(this.combat.spin);
         ctx.translate(0, -hip.y);
       }
+
+      this.drawAttackArc(ctx, pose);
 
       if (this.selected) {
         const rr = headR + 12;
