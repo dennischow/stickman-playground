@@ -115,12 +115,14 @@ import { audio } from './audio.js';
   }
 
   const effects = [];
+  const splats = [];
   let shakeAmt = 0;
   let freezeT = 0;
   let slowmoT = 0;
   let slowmoDur = 1;
   let slowmoScale = 1;
   let inkFlash = 0;
+  let flashTint = '#f7f6f2';
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   function requestHitStop(sec) {
@@ -134,6 +136,16 @@ import { audio } from './audio.js';
     slowmoT = dur;
   }
 
+  function requestFlash(amt = 0.3, tint = '#f7f6f2') {
+    if (reduceMotion) amt = Math.min(amt, 0.08);
+    inkFlash = Math.max(inkFlash, amt);
+    flashTint = tint;
+  }
+
+  function clearSplats() {
+    splats.length = 0;
+  }
+
   function resize() {
     DPR = Math.max(1, window.devicePixelRatio || 1);
     W = window.innerWidth;
@@ -143,6 +155,7 @@ import { audio } from './audio.js';
     canvas.style.width = W + 'px';
     canvas.style.height = H + 'px';
     sceneDirty = true;
+    splats.length = 0;
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     const groundY = H - 70;
     for (const f of figures) {
@@ -159,6 +172,7 @@ import { audio } from './audio.js';
     return t * t * (3 - 2 * t);
   };
   const easeOut = t => 1 - (1 - t) * (1 - t);
+  const pick = list => list[Math.floor(Math.random() * list.length)];
 
   const lerpPt = (a, b, t) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
   const lerpChain = (a, b, t) => a.map((p, i) => lerpPt(p, b[i], t));
@@ -183,6 +197,59 @@ import { audio } from './audio.js';
     return { x: px * c - py * s, y: px * s + py * c };
   }
 
+  function makeSprite(size, paint) {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    paint(c.getContext('2d'), size);
+    return c;
+  }
+
+  const dustSprites = Array.from({ length: 4 }, () => makeSprite(64, (g, s) => {
+    const cx = s / 2, cy = s / 2;
+    const grad = g.createRadialGradient(cx, cy, 1, cx, cy, s * 0.5);
+    grad.addColorStop(0, 'rgba(146, 154, 164, 0.5)');
+    grad.addColorStop(0.55, 'rgba(146, 154, 164, 0.24)');
+    grad.addColorStop(1, 'rgba(146, 154, 164, 0)');
+    g.fillStyle = grad;
+    g.beginPath();
+    g.arc(cx, cy, s * 0.5, 0, Math.PI * 2);
+    g.fill();
+    for (let i = 0; i < 5; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = Math.random() * s * 0.24;
+      g.globalAlpha = 0.1 + Math.random() * 0.14;
+      g.beginPath();
+      g.arc(cx + Math.cos(a) * d, cy + Math.sin(a) * d * 0.7, s * (0.07 + Math.random() * 0.1), 0, Math.PI * 2);
+      g.fill();
+    }
+  }));
+
+  const inkSprites = Array.from({ length: 5 }, () => makeSprite(96, (g, s) => {
+    g.translate(s / 2, s / 2);
+    g.fillStyle = '#1b1a17';
+    const blobs = 6 + Math.floor(Math.random() * 4);
+    for (let i = 0; i < blobs; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = Math.random() * s * 0.18;
+      g.globalAlpha = 0.72 + Math.random() * 0.28;
+      g.beginPath();
+      g.ellipse(
+        Math.cos(a) * d, Math.sin(a) * d,
+        4 + Math.random() * 10, 3 + Math.random() * 8,
+        Math.random() * Math.PI, 0, Math.PI * 2
+      );
+      g.fill();
+    }
+    g.globalAlpha = 0.8;
+    for (let i = 0; i < 7; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = s * (0.22 + Math.random() * 0.2);
+      g.beginPath();
+      g.arc(Math.cos(a) * d, Math.sin(a) * d, 1 + Math.random() * 2.4, 0, Math.PI * 2);
+      g.fill();
+    }
+  }));
+
   function spawnStar(x, y, scale = 1) {
     effects.push({ type: 'star', x, y, t: 0, life: 0.18, scale });
   }
@@ -196,7 +263,10 @@ import { audio } from './audio.js';
         vx: (Math.random() - 0.5) * 50,
         vy: -20 - Math.random() * 45,
         t: 0, life: 0.3 + Math.random() * 0.25,
-        r: 2 + Math.random() * 3.5
+        r: 2 + Math.random() * 3.5,
+        spr: Math.floor(Math.random() * dustSprites.length),
+        rot: Math.random() * Math.PI * 2,
+        vr: (Math.random() - 0.5) * 2.2
       });
     }
   }
@@ -210,7 +280,10 @@ import { audio } from './audio.js';
         vx: -dir * (40 + Math.random() * 70),
         vy: -12 - Math.random() * 30,
         t: 0, life: 0.22 + Math.random() * 0.18,
-        r: 2 + Math.random() * 2.5
+        r: 2 + Math.random() * 2.5,
+        spr: Math.floor(Math.random() * dustSprites.length),
+        rot: Math.random() * Math.PI * 2,
+        vr: (Math.random() - 0.5) * 2.2
       });
     }
   }
@@ -228,6 +301,9 @@ import { audio } from './audio.js';
         vy: 8 + Math.random() * 34,
         r: 2 + Math.random() * 6,
         drip: Math.random() < 0.35 ? 6 + Math.random() * 14 : 0,
+        spr: Math.floor(Math.random() * inkSprites.length),
+        rot: Math.random() * Math.PI * 2,
+        vr: (Math.random() - 0.5) * 1.6,
         t: 0, life: 0.28 + Math.random() * 0.2
       });
     }
@@ -235,6 +311,67 @@ import { audio } from './audio.js';
 
   function spawnRing(x, y, scale = 1) {
     effects.push({ type: 'ring', x, y, t: 0, life: 0.45, scale });
+  }
+
+  function spawnBurst(x, y, scale = 1) {
+    effects.push({
+      type: 'burst', x, y, t: 0, life: 0.16, scale,
+      rot: Math.random() * Math.PI * 2
+    });
+  }
+
+  function spawnWord(x, y, text, scale = 1, color = '#1b1a17') {
+    const wx = clamp(x, 70 * scale, W - 70 * scale);
+    const wy = clamp(y, 70, H - 50);
+    for (let i = effects.length - 1; i >= 0; i--) {
+      const e = effects[i];
+      if (e.type === 'word' && Math.abs(e.x - wx) < 230 * scale && Math.abs(e.y - wy) < 90) {
+        effects.splice(i, 1);
+      }
+    }
+    effects.push({
+      type: 'word', x: wx, y: wy, text, t: 0, life: 0.62,
+      scale, color, rot: (Math.random() - 0.5) * 0.16, vy: -26
+    });
+  }
+
+  function spawnSplat(x, y, scale = 1) {
+    const blobs = [];
+    const drips = [];
+    const specks = [];
+    const count = 4 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = Math.random() * 18 * scale;
+      blobs.push({
+        x: Math.cos(a) * d,
+        y: Math.sin(a) * d * 0.28,
+        rx: (7 + Math.random() * 13) * scale,
+        ry: (2 + Math.random() * 3.4) * scale,
+        rot: (Math.random() - 0.5) * 0.9
+      });
+    }
+    for (let i = 0; i < 7; i++) {
+      specks.push({
+        x: (Math.random() - 0.5) * 76 * scale,
+        y: (Math.random() - 0.5) * 9 * scale,
+        r: (0.8 + Math.random() * 1.8) * scale
+      });
+    }
+    const nd = 1 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < nd; i++) {
+      drips.push({
+        x: (Math.random() - 0.5) * 34 * scale,
+        y: (2 + Math.random() * 4) * scale,
+        r: (1 + Math.random() * 1.8) * scale,
+        len: (4 + Math.random() * 9) * scale
+      });
+    }
+    splats.push({
+      x, y, scale, rot: (Math.random() - 0.5) * 0.22,
+      blobs, drips, specks, t: 0, life: 24
+    });
+    if (splats.length > (reduceMotion ? 28 : 64)) splats.shift();
   }
 
   function updateEffects(dt) {
@@ -250,7 +387,48 @@ import { audio } from './audio.js';
         e.x += e.vx * dt;
         e.y += e.vy * dt;
         e.vy += 30 * dt;
+      } else if (e.type === 'word') {
+        e.y += e.vy * dt;
+        e.vy *= Math.pow(0.2, dt);
       }
+    }
+  }
+
+  function updateSplats(dt) {
+    for (let i = splats.length - 1; i >= 0; i--) {
+      const s = splats[i];
+      s.t += dt;
+      if (s.t >= s.life) splats.splice(i, 1);
+    }
+  }
+
+  function drawSplats() {
+    for (const s of splats) {
+      const fade = clamp((s.life - s.t) / 3.5, 0, 1);
+      if (fade <= 0) continue;
+      ctx.save();
+      ctx.translate(s.x, s.y);
+      ctx.rotate(s.rot);
+      ctx.fillStyle = '#1b1a17';
+      ctx.globalAlpha = 0.38 * fade;
+      for (const b of s.blobs) {
+        ctx.beginPath();
+        ctx.ellipse(b.x, b.y, b.rx, b.ry, b.rot, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 0.4 * fade;
+      for (const p of s.specks) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 0.45 * fade;
+      for (const d of s.drips) {
+        ctx.beginPath();
+        ctx.ellipse(d.x, d.y + d.len * 0.5, d.r, d.len * 0.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
     }
   }
 
@@ -283,25 +461,85 @@ import { audio } from './audio.js';
         }
         ctx.restore();
       } else if (e.type === 'dust') {
+        const spr = dustSprites[e.spr] || dustSprites[0];
+        const size = e.r * 3.4 * (1 + k * 1.15);
         ctx.save();
-        ctx.globalAlpha = 0.45 * (1 - k);
-        ctx.fillStyle = '#9aa3ad';
-        ctx.beginPath();
-        ctx.arc(e.x, e.y, e.r * (1 + k * 1.2), 0, Math.PI * 2);
-        ctx.fill();
+        ctx.translate(e.x, e.y);
+        ctx.rotate(e.rot + e.vr * e.t);
+        ctx.globalAlpha = 0.5 * (1 - k);
+        ctx.drawImage(spr, -size / 2, -size / 2, size, size);
         ctx.restore();
       } else if (e.type === 'ink') {
+        const spr = inkSprites[e.spr] || inkSprites[0];
+        const size = e.r * 3.6 * (1 + k * 0.3);
         ctx.save();
-        ctx.globalAlpha = 0.72 * (1 - k);
-        ctx.fillStyle = '#1b1a17';
-        ctx.beginPath();
-        ctx.ellipse(e.x, e.y, e.r, e.r * (e.drip ? 1.08 : 0.82), 0, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.translate(e.x, e.y);
+        ctx.rotate(e.rot + e.vr * e.t);
+        ctx.globalAlpha = 0.82 * (1 - k);
+        ctx.drawImage(spr, -size / 2, -size / 2, size, size);
+        ctx.restore();
         if (e.drip) {
+          ctx.save();
+          ctx.globalAlpha = 0.6 * (1 - k);
+          ctx.fillStyle = '#1b1a17';
           ctx.beginPath();
           ctx.ellipse(e.x, e.y + e.r + e.drip * k * 0.6, Math.max(1, e.r * 0.3), e.drip * 0.42, 0, 0, Math.PI * 2);
           ctx.fill();
+          ctx.restore();
         }
+      } else if (e.type === 'burst') {
+        const r = (16 + 68 * easeOut(k)) * e.scale;
+        ctx.save();
+        ctx.translate(e.x, e.y);
+        ctx.rotate(e.rot + k * 0.18);
+        ctx.globalAlpha = 1 - k;
+        ctx.beginPath();
+        const points = 10;
+        for (let i = 0; i < points * 2; i++) {
+          const a = (i / (points * 2)) * Math.PI * 2;
+          const rr = i % 2 ? r * 0.34 : r;
+          if (i === 0) ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+          else ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+        }
+        ctx.closePath();
+        ctx.fillStyle = '#fffdf6';
+        ctx.fill();
+        ctx.strokeStyle = '#1b1a17';
+        ctx.lineWidth = 2.2 * e.scale;
+        ctx.lineJoin = 'round';
+        ctx.stroke();
+        ctx.beginPath();
+        for (let i = 0; i < points * 2; i++) {
+          const a = (i / (points * 2)) * Math.PI * 2 + 0.08;
+          const rr = i % 2 ? r * 0.24 : r * 0.62;
+          if (i === 0) ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+          else ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+        }
+        ctx.closePath();
+        ctx.fillStyle = '#ffd54f';
+        ctx.fill();
+        ctx.restore();
+      } else if (e.type === 'word') {
+        const pop = Math.min(1, e.t / 0.09);
+        const fade = e.t > e.life - 0.18 ? Math.max(0, (e.life - e.t) / 0.18) : 1;
+        const sc = e.scale * (0.72 + 0.28 * easeOut(pop));
+        ctx.save();
+        ctx.translate(e.x, e.y);
+        ctx.rotate(e.rot + (1 - pop) * 0.1);
+        ctx.scale(sc, sc);
+        ctx.font = '900 italic 44px "Arial Black", Impact, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.lineJoin = 'round';
+        ctx.globalAlpha = fade * 0.35;
+        ctx.fillStyle = '#a86f00';
+        ctx.fillText(e.text, 3, 4);
+        ctx.globalAlpha = fade;
+        ctx.lineWidth = 8;
+        ctx.strokeStyle = '#f7f6f2';
+        ctx.strokeText(e.text, 0, 0);
+        ctx.fillStyle = e.color;
+        ctx.fillText(e.text, 0, 0);
         ctx.restore();
       } else if (e.type === 'ring') {
         const sc = e.scale || 1;
@@ -348,6 +586,10 @@ import { audio } from './audio.js';
     caster.pushAnim = 0.45;
     caster.x = clamp(caster.x - dir * 8, 50, W - 50);
     spawnRing(caster.x + dir * 26, caster.y - 55);
+    spawnBurst(caster.x + dir * 30, caster.y - 55, 1.7);
+    spawnWord(caster.x + dir * 46, caster.y - 108, 'BOOM', 1.2, '#a86f00');
+    requestSlowmo(0.42, 0.35);
+    requestFlash(0.12, '#ffe082');
     audio.blast(panFor(caster.x));
     shakeAmt = Math.max(shakeAmt, 6);
     requestHitStop(0.04);
@@ -381,6 +623,9 @@ import { audio } from './audio.js';
       this.primary = false;
       this.think = 1 + Math.random() * 2.5;
       this.speedMul = 0.9 + Math.random() * 0.35;
+      this.jumpMul = 0.92 + Math.random() * 0.2;
+      this.jumpPrep = 0.24 + Math.random() * 0.12;
+      this.jumpRest = 0.45 + Math.random() * 0.25;
       this.bodyScale = 1;
       this.jumpT = 0;
       this.jumpPhase = 'crouch';
@@ -505,7 +750,10 @@ import { audio } from './audio.js';
             spawnStar(this.x, this.y - 45, 1.6);
             spawnDust(this.x, Math.min(this.y + 8, groundY), 8);
             spawnInk(this.x, this.y - 45, 6);
-            inkFlash = Math.max(inkFlash, 0.3);
+            spawnBurst(this.x, this.y - 45, 1.6);
+            spawnWord(this.x, this.y - 112, pick(['BAM', 'WHAM', 'SLAM']), 1.2);
+            spawnSplat(this.x, groundY, 1.5);
+            requestFlash(0.22, '#ffd54f');
             shakeAmt = Math.max(shakeAmt, 14);
             requestHitStop(0.07);
             audio.wallHit(panFor(this.x));
@@ -515,6 +763,7 @@ import { audio } from './audio.js';
             b.t = 0.9;
             spawnDust(this.x, this.y, 6);
             spawnInk(this.x, this.y - 24, 3);
+            spawnSplat(this.x, this.y, 1.1);
             shakeAmt = Math.max(shakeAmt, 8);
             audio.land(panFor(this.x), true);
           }
@@ -527,6 +776,7 @@ import { audio } from './audio.js';
             b.phase = 'down';
             b.t = 0.9;
             spawnDust(this.x, this.y, 6);
+            spawnSplat(this.x, this.y, 1.1);
             shakeAmt = Math.max(shakeAmt, 8);
             audio.land(panFor(this.x), true);
           }
@@ -560,14 +810,14 @@ import { audio } from './audio.js';
             this.jumpT = 0;
             this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 12));
             this.jumpPhase = 'rest';
-          } else if (this.jumpT < 0.3) {
+          } else if (this.jumpT < this.jumpPrep) {
             this.jumpPhase = 'crouch';
             this.jumpT += dt;
-            this.bodyScale = lerp(1, 0.84, this.jumpT / 0.3);
+            this.bodyScale = lerp(1, 0.84, this.jumpT / this.jumpPrep);
           } else {
             this.jumpPhase = 'air';
             this.bodyScale = 1.08;
-            this.vy = -540;
+            this.vy = -540 * this.jumpMul;
             this.jumpT = 0;
             spawnDust(this.x, this.y, 4);
             audio.jump(panFor(this.x));
@@ -581,7 +831,7 @@ import { audio } from './audio.js';
             this.y = groundY;
             this.vy = 0;
             this.bodyScale = 0.88;
-            this.restT = 0.55;
+            this.restT = this.jumpRest;
             this.jumpT = 0;
             spawnDust(this.x, this.y, 6);
             spawnSkid(this.x, this.y, this.facing);
@@ -725,7 +975,20 @@ import { audio } from './audio.js';
       }
       spawnInk(midX, hitY, knocked ? 6 : 3);
       spawnRing(midX, hitY, clamp(0.7 + kbx / 300, 0.7, 1.7));
-      if (knocked || kbx >= 240) inkFlash = Math.max(inkFlash, 0.32);
+      if (knocked) {
+        requestSlowmo(0.38, 0.5);
+        spawnBurst(midX, hitY, starScale * 1.6);
+        spawnWord(enemy.x, enemy.y - 104, 'K.O.', 1.5, '#a86f00');
+      } else if (kbx >= 240) {
+        spawnBurst(midX, hitY, 1.15);
+        spawnWord(midX, hitY - 42, pick(['BAM', 'WHAM']), 1.1);
+      } else if (kbx >= 150) {
+        spawnWord(midX, hitY - 36, pick(['POW', 'WHACK']), 0.95);
+      }
+      if (knocked || kbx >= 150) {
+        spawnSplat(midX + dir * 8, H - 70, clamp(0.85 + kbx / 500, 0.85, 1.5));
+      }
+      if (knocked || kbx >= 150) requestFlash(knocked ? 0.22 : 0.16, '#ffd54f');
       audio.hit(reactKind, clamp(0.75 + kbx / 420, 0.75, 1.35), panFor(midX));
       if (knocked && kbx >= 240) audio.ko(panFor(enemy.x));
     }
@@ -815,6 +1078,8 @@ import { audio } from './audio.js';
           c.landed = true;
           c.kbx *= 0.18;
           spawnDust(this.x, this.y, 6);
+          spawnInk(this.x, this.y - 12, 3);
+          spawnSplat(this.x + this.facing * 8, this.y, 1.25);
           audio.land(panFor(this.x), true);
           shakeAmt = Math.max(shakeAmt, 3);
         }
@@ -1085,7 +1350,10 @@ import { audio } from './audio.js';
 
       let lean = 0;
       let reactHold = 0, reactSettle = 0, reactWobble = 0;
-      if (b === 'run') lean = 0.38 * f;
+      if (b === 'run') {
+        const speedK = clamp((this.speedMul - 0.9) / 0.35, 0, 1);
+        lean = (0.34 + speedK * 0.08) * f;
+      }
       else if (b === 'walk') lean = 0.06 * f;
       else if (b === 'crawl') lean = 1.4 * f;
       else if (b === 'jump') lean = 0.1 * f;
@@ -1634,11 +1902,13 @@ import { audio } from './audio.js';
       ctx.strokeStyle = 'rgba(27, 26, 23, 0.38)';
 
       if (running) {
-        ctx.lineWidth = 1.3;
+        const speedK = clamp((this.speedMul - 0.9) / 0.35, 0, 1);
+        const lineScale = 0.8 + speedK * 0.45;
+        ctx.lineWidth = 1.2 + speedK * 0.3;
         for (let i = 0; i < 4; i++) {
           const yy = pose.hip.y - 8 - i * 9 + Math.sin(p * 2 + i) * 3;
-          const len = 14 + (i % 2) * 10 + Math.abs(Math.cos(p + i)) * 14;
-          ctx.globalAlpha = 0.35 - i * 0.05;
+          const len = (14 + (i % 2) * 10 + Math.abs(Math.cos(p + i)) * 14) * lineScale;
+          ctx.globalAlpha = (0.35 - i * 0.05) * (0.85 + speedK * 0.3);
           ctx.beginPath();
           ctx.moveTo(-f * (22 + i * 4), yy);
           ctx.lineTo(-f * (22 + len + i * 4), yy);
@@ -1972,7 +2242,10 @@ import { audio } from './audio.js';
 
   if (sceneSelect) {
     sceneSelect.value = sceneId;
-    sceneSelect.addEventListener('change', () => setScene(sceneSelect.value));
+    sceneSelect.addEventListener('change', () => {
+      setScene(sceneSelect.value);
+      clearSplats();
+    });
   }
   document.body.dataset.scene = sceneId;
 
@@ -2216,6 +2489,7 @@ import { audio } from './audio.js';
     if (dt > 0) {
       for (const f of figures) f.update(dt, groundY);
       updateEffects(dt);
+      updateSplats(dt);
     }
 
     for (const f of figures) f._renderPose = f.pose();
@@ -2228,6 +2502,7 @@ import { audio } from './audio.js';
       ctx.translate((Math.random() - 0.5) * shakeAmt, (Math.random() - 0.5) * shakeAmt);
     }
 
+    drawSplats();
     for (const f of figures) f.drawShadow(ctx, groundY);
     for (const f of figures) f.draw(ctx);
 
@@ -2258,7 +2533,7 @@ import { audio } from './audio.js';
     if (inkFlash > 0) {
       ctx.save();
       ctx.globalAlpha = inkFlash;
-      ctx.fillStyle = '#f7f6f2';
+      ctx.fillStyle = flashTint;
       ctx.fillRect(0, 0, W, H);
       ctx.restore();
       inkFlash = Math.max(0, inkFlash - rdt * 8);
