@@ -351,11 +351,16 @@ import { Camera } from './camera.js';
     return {
       head: lerpPt(a.head, b.head, t),
       neck: lerpPt(a.neck, b.neck, t),
+      chest: lerpPt(a.chest, b.chest, t),
       hip: lerpPt(a.hip, b.hip, t),
       armL: lerpChain(a.armL, b.armL, t),
       armR: lerpChain(a.armR, b.armR, t),
       legL: lerpChain(a.legL, b.legL, t),
       legR: lerpChain(a.legR, b.legR, t),
+      handL: lerpPt(a.handL, b.handL, t),
+      handR: lerpPt(a.handR, b.handR, t),
+      toeL: lerpPt(a.toeL, b.toeL, t),
+      toeR: lerpPt(a.toeR, b.toeR, t),
       headR: a.headR + (b.headR - a.headR) * t,
       s: a.s + (b.s - a.s) * t,
       f: b.f
@@ -992,19 +997,23 @@ import { Camera } from './camera.js';
           Math.abs(armL.x) + Math.abs(armL.y) + Math.abs(armR.x) + Math.abs(armR.y) < 0.02) {
         return pose;
       }
+      const chest = { x: pose.chest.x + dx, y: pose.chest.y + dy };
       const neck = { x: pose.neck.x + dx, y: pose.neck.y + dy };
       const head = { x: pose.head.x + dx + headS.x, y: pose.head.y + dy + headS.y };
       const shiftArm = (pts, a) => [
-        { x: neck.x, y: neck.y },
+        { x: pts[0].x + dx, y: pts[0].y + dy },
         { x: pts[1].x + dx + a.x * 0.5, y: pts[1].y + dy + a.y * 0.5 },
         { x: pts[2].x + dx + a.x, y: pts[2].y + dy + a.y }
       ];
       return {
         ...pose,
+        chest,
         neck,
         head,
         armL: shiftArm(pose.armL, armL),
-        armR: shiftArm(pose.armR, armR)
+        armR: shiftArm(pose.armR, armR),
+        handL: { x: pose.handL.x + dx + armL.x, y: pose.handL.y + dy + armL.y },
+        handR: { x: pose.handR.x + dx + armR.x, y: pose.handR.y + dy + armR.y }
       };
     }
 
@@ -1649,7 +1658,7 @@ import { Camera } from './camera.js';
       const f = this.facing;
       const b = this.behavior;
       const crawling = b === 'crawl' && !this.dragging && !this.fighting;
-      const hipY = (crawling ? -14 : -38) * s;
+      const hipY = (crawling ? -14 : -39.5) * s;
 
       let lean = 0;
       let reactHold = 0, reactSettle = 0, reactWobble = 0;
@@ -1700,9 +1709,16 @@ import { Camera } from './camera.js';
         else if (b === 'walk') bounce = Math.abs(Math.cos(p)) * 1.5 * s;
       }
 
-      let hip, neck, head;
+      let hip, chest, neck, head;
       const fightingPose = this.fighting && !this.dragging;
       const combatState = fightingPose ? this.combat.state : '';
+      let spineBend = clamp(-lean * 0.16, -0.09, 0.09);
+      if (combatState === 'punch' || combatState === 'combo') spineBend += 0.04 * f;
+      else if (combatState === 'block') spineBend += 0.03 * f;
+      else if (combatState === 'kick' || combatState === 'sweep' || combatState === 'flyingkick') spineBend -= 0.04 * f;
+      if (this.landT > 0 && !crawling) {
+        spineBend += f * 0.05 * clamp(this.landT / 0.4, 0, 1);
+      }
       let down = 0;
       let downElapsed = 0;
       let settle = 0;
@@ -1732,11 +1748,14 @@ import { Camera } from './camera.js';
         hip.x -= f * (2 + 6 * reactHold);
         hip.y += 1 + 4 * reactHold;
       }
-      const neckLocal = rot(0, -34 * s, lean);
-      neck = { x: hip.x + neckLocal.x, y: hip.y + neckLocal.y };
+      const torsoLen = 37 * s;
+      const chestLocal = rot(0, -torsoLen * 0.55, lean + spineBend * 0.35);
+      chest = { x: hip.x + chestLocal.x, y: hip.y + chestLocal.y };
+      const neckLocal = rot(0, -torsoLen * 0.45, lean + spineBend);
+      neck = { x: chest.x + neckLocal.x, y: chest.y + neckLocal.y };
       head = crawling
         ? { x: neck.x + f * (headR + 5), y: neck.y - 3 * s }
-        : { x: neck.x, y: neck.y - headR - 6 };
+        : { x: neck.x + spineBend * 7 * s, y: neck.y - headR - 6 };
       if (reactHold > 0) {
         head.x -= f * (2 + 5 * reactHold);
         head.y += 1.5 * reactHold + 1.5 * reactSettle;
@@ -1745,14 +1764,17 @@ import { Camera } from './camera.js';
       if (down > 0) {
         const lieAngle = -1.5 * f;
         const lieHip = { x: -6 * f, y: -10 * s + breath };
-        const lieNeckLocal = rot(0, -34 * s, lieAngle);
+        const lieNeckLocal = rot(0, -torsoLen, lieAngle);
         const lieNeck = { x: lieHip.x + lieNeckLocal.x, y: lieHip.y + lieNeckLocal.y };
+        const lieChest = lerpPt(lieHip, lieNeck, 0.55);
         const lieHeadLocal = rot(0, -(headR + 6), lieAngle);
         const lieHead = { x: lieNeck.x + lieHeadLocal.x, y: lieNeck.y + lieHeadLocal.y };
         hip = lerpPt(hip, lieHip, down);
+        chest = lerpPt(chest, lieChest, down);
         neck = lerpPt(neck, lieNeck, down);
         head = lerpPt(head, lieHead, down);
         hip.y += settle * down;
+        chest.y += settle * 0.85 * down;
         head.y += settle * 0.6 * down;
       }
 
@@ -1772,42 +1794,45 @@ import { Camera } from './camera.js';
         lKnee = lerp(-0.4, -0.2, prog); rKnee = lerp(-0.4, -0.15, prog);
       } else if (fightingPose) {
         const cs = this.combat.state;
-        const bob = Math.sin(p * 2) * 0.04;
-        lHip = 0.45 + bob; rHip = -0.35;
-        lKnee = -0.55; rKnee = -0.25;
-        la = 0.9; la2 = -0.5;
-        ra = -0.4; ra2 = 1.5;
+        const bob = Math.sin(p * 2) * 0.025;
+        lHip = 0.55 + bob; rHip = -0.42;
+        lKnee = -0.8; rKnee = -0.12;
+        la = -0.1; la2 = 2.3;
+        ra = 0.6; ra2 = 1.5;
 
         if (cs === 'punch') {
           const e = 0.35 - this.combat.t;
           const prog = Math.min(clamp(e / 0.18, 0, 1), 1 - clamp((e - 0.18) / 0.12, 0, 1));
-          la = lerp(0.9, 0.35, prog); la2 = lerp(-0.5, 1.2, prog);
-          ra = lerp(-0.4, 1.5, prog); ra2 = lerp(1.5, 0, prog);
+          ra = lerp(0.6, 1.35, prog); ra2 = lerp(1.5, 0, prog);
+          la = -0.1; la2 = 2.3;
         } else if (cs === 'kick') {
           const e = 0.45 - this.combat.t;
-          const prog = Math.min(clamp(e / 0.25, 0, 1), 1 - clamp((e - 0.25) / 0.14, 0, 1));
-          lHip = lerp(0.45, 1.3, prog); lKnee = lerp(-0.55, -0.12, prog);
-          rHip = -0.25; rKnee = -0.35;
-          la = lerp(0.9, -0.8, prog); la2 = lerp(-0.5, 0.3, prog);
-          ra = lerp(-0.4, 0.9, prog); ra2 = lerp(1.5, 0.35, prog);
+          const extend = smoothstep(0.10, 0.24, e) * (1 - smoothstep(0.30, 0.44, e));
+          const windup = 1 - smoothstep(0, 0.12, e);
+          lHip = lerp(0.52, 1.38, extend) - windup * 0.08;
+          lKnee = lerp(-1.25, -0.05, extend) - windup * 0.3;
+          rHip = -0.32; rKnee = -0.5;
+          la = lerp(-0.1, -0.9, extend); la2 = lerp(2.3, 0.5, extend);
+          ra = lerp(0.6, 0.95, extend); ra2 = lerp(1.5, 1.15, extend);
         } else if (cs === 'combo') {
           const step = this.combat.comboStep || 0;
           const e = 0.95 - this.combat.t;
           if (step === 0) {
             const prog = Math.min(clamp(e / 0.10, 0, 1), 1 - clamp((e - 0.14) / 0.10, 0, 1));
-            ra = lerp(-0.4, 1.5, prog); ra2 = lerp(1.5, 0, prog);
-            la = 0.85; la2 = -0.4;
+            ra = lerp(0.6, 1.35, prog); ra2 = lerp(1.5, 0, prog);
+            la = -0.1; la2 = 2.3;
           } else if (step === 1) {
             const e2 = e - 0.3;
             const prog = Math.min(clamp(e2 / 0.08, 0, 1), 1 - clamp((e2 - 0.12) / 0.10, 0, 1));
-            la = lerp(0.9, 1.5, prog); la2 = lerp(-0.5, 0, prog);
-            ra = lerp(1.5, -0.35, prog); ra2 = lerp(0, 1.4, prog);
+            la = lerp(-0.1, 1.2, prog); la2 = lerp(2.3, 0.05, prog);
+            ra = lerp(1.35, 0.6, prog); ra2 = lerp(0, 1.5, prog);
           } else {
             const e3 = e - 0.58;
             const prog = Math.min(clamp(e3 / 0.12, 0, 1), 1 - clamp((e3 - 0.16) / 0.14, 0, 1));
-            lHip = lerp(0.45, 1.35, prog); lKnee = lerp(-0.55, -0.1, prog);
-            la = lerp(0.9, -0.85, prog); la2 = lerp(-0.5, 0.35, prog);
-            ra = lerp(-0.35, 0.95, prog); ra2 = lerp(1.4, 0.3, prog);
+            lHip = lerp(0.55, 1.38, prog); lKnee = lerp(-1.25, -0.05, prog);
+            rHip = -0.32; rKnee = -0.5;
+            la = lerp(-0.1, -0.9, prog); la2 = lerp(2.3, 0.5, prog);
+            ra = lerp(0.6, 0.95, prog); ra2 = lerp(1.5, 1.15, prog);
           }
         } else if (cs === 'flyingkick') {
           const elapsed = 0.85 - this.combat.t;
@@ -1829,39 +1854,40 @@ import { Camera } from './camera.js';
           ra = -0.85; ra2 = 0.3;
         } else if (cs === 'sweep') {
           lHip = 1.55; lKnee = -0.05;
-          rHip = -0.5; rKnee = 0.9;
-          la = -0.6; la2 = 0.9;
-          ra = 0.4; ra2 = 1.1;
+          rHip = -0.2; rKnee = -1.2;
+          la = -0.7; la2 = 0.6;
+          ra = 0.7; ra2 = 0.9;
         } else if (cs === 'uppercut') {
           const elapsed = 0.48 - this.combat.t;
           if (elapsed < 0.16) {
-            la = 0.75; la2 = 0.6;
-            ra = 0.4; ra2 = 0.9;
-            lHip = 0.7; rHip = 0.55;
-            lKnee = 0.4 - lHip; rKnee = 0.35 - rHip;
+            la = -0.1; la2 = 2.3;
+            ra = 0.6; ra2 = 1.5;
+            lHip = 0.6; rHip = -0.1;
+            lKnee = -0.9; rKnee = -0.7;
           } else {
             const prog = Math.min(clamp((elapsed - 0.16) / 0.1, 0, 1), 1 - clamp((elapsed - 0.26) / 0.14, 0, 1));
-            la = lerp(0.75, 0.5, prog); la2 = lerp(0.6, 0.5, prog);
-            ra = lerp(0.4, -1.35, prog); ra2 = lerp(0.9, 0.15, prog);
-            lHip = lerp(0.7, 0.15, prog); rHip = lerp(0.55, -0.1, prog);
-            lKnee = lerp(0.4 - 0.7, -0.2, prog); rKnee = lerp(0.35 - 0.55, -0.15, prog);
+            la = -0.1; la2 = 2.3;
+            ra = lerp(0.6, 2.2, prog); ra2 = lerp(1.5, 0.35, prog);
+            lHip = lerp(0.6, 0.2, prog); rHip = lerp(-0.1, -0.2, prog);
+            lKnee = lerp(-0.9, -0.1, prog); rKnee = lerp(-0.7, -0.1, prog);
           }
         } else if (cs === 'block') {
-          lHip = 0.35; lKnee = -0.6;
-          la = 0.65; la2 = 1.45;
-          ra = 0.75; ra2 = 1.4;
+          lHip = 0.4; lKnee = -0.9;
+          rHip = -0.35; rKnee = -0.3;
+          la = 0.9; la2 = 2.35;
+          ra = 0.8; ra2 = 2.45;
         } else if (cs === 'stagger') {
           const dur = this.combat.reactDur || 0.35;
           const rt = clamp(1 - this.combat.t / dur, 0, 1);
           const stepLift = Math.sin(Math.PI * clamp(rt / 0.55, 0, 1)) * reactHold;
-          la = lerp(0.9, 1.45, reactHold) + reactWobble;
-          la2 = lerp(-0.5, 1.25, reactHold);
-          ra = lerp(-0.4, -0.88, reactHold) - reactWobble;
-          ra2 = lerp(1.5, 0.5, reactHold);
-          lHip = lerp(0.45, 0.6, reactHold);
-          rHip = lerp(-0.35, -0.85, reactHold) - 0.1 * stepLift;
-          lKnee = lerp(-0.55, -0.45, reactHold);
-          rKnee = lerp(-0.25, -0.35, reactHold) - 0.35 * stepLift;
+          la = lerp(-0.1, 1.2, reactHold) + reactWobble;
+          la2 = lerp(2.3, 0.6, reactHold);
+          ra = lerp(0.6, -0.8, reactHold) - reactWobble;
+          ra2 = lerp(1.5, 0.7, reactHold);
+          lHip = lerp(0.55, 0.65, reactHold);
+          rHip = lerp(-0.42, -0.9, reactHold) - 0.1 * stepLift;
+          lKnee = lerp(-0.8, -0.5, reactHold);
+          rKnee = lerp(-0.12, -0.45, reactHold) - 0.35 * stepLift;
         } else if (cs === 'launched') {
           const w = Math.sin(p * 16) * 0.3;
           la = -0.95 + w; la2 = 0.85;
@@ -1888,25 +1914,31 @@ import { Camera } from './camera.js';
             lKnee = -0.3; rKnee = -0.22;
           }
         } else {
-          la = 0.9 + bob; la2 = -0.5;
-          ra = -0.4 - bob; ra2 = 1.5;
+          la = -0.1 + bob; la2 = 2.3;
+          ra = 0.6 - bob; ra2 = 1.5;
         }
       } else if (b === 'walk') {
         const sw = Math.sin(p);
-        lHip = sw * 0.7; rHip = -sw * 0.7;
-        lKnee = -(0.1 + 0.95 * Math.max(0, Math.cos(p - 0.5)));
-        rKnee = -(0.1 + 0.95 * Math.max(0, Math.cos(p + Math.PI - 0.5)));
-        la = 0.08 - sw * 0.45;
-        ra = 0.08 + sw * 0.45;
-        la2 = 0.3; ra2 = 0.3;
+        const liftL = Math.max(0, Math.cos(p - 0.4));
+        const liftR = Math.max(0, Math.cos(p + Math.PI - 0.4));
+        lHip = sw * 0.72; rHip = -sw * 0.72;
+        lKnee = -(0.12 + 1.05 * liftL);
+        rKnee = -(0.12 + 1.05 * liftR);
+        la = 0.1 - sw * 0.55;
+        ra = 0.1 + sw * 0.55;
+        la2 = 0.32 + Math.max(0, -sw) * 0.2;
+        ra2 = 0.32 + Math.max(0, sw) * 0.2;
       } else if (b === 'run') {
         const sw = Math.sin(p);
-        lHip = sw; rHip = -sw;
-        lKnee = -(0.35 + 1.65 * Math.max(0, Math.cos(p - 0.3)));
-        rKnee = -(0.35 + 1.65 * Math.max(0, Math.cos(p + Math.PI - 0.3)));
-        la = 0.35 - sw * 0.7;
-        ra = 0.35 + sw * 0.7;
-        la2 = 1.1; ra2 = 1.1;
+        const liftL = Math.max(0, Math.cos(p - 0.3));
+        const liftR = Math.max(0, Math.cos(p + Math.PI - 0.3));
+        lHip = sw * 1.05; rHip = -sw * 1.05;
+        lKnee = -(0.4 + 1.55 * liftL);
+        rKnee = -(0.4 + 1.55 * liftR);
+        la = 0.35 - sw * 0.82;
+        ra = 0.35 + sw * 0.82;
+        la2 = 1.15 + Math.max(0, -sw) * 0.24;
+        ra2 = 1.15 + Math.max(0, sw) * 0.24;
       } else if (b === 'crawl') {
         la = 1.15 + Math.sin(p) * 0.45;
         ra = 1.15 + Math.sin(p + Math.PI) * 0.45;
@@ -1946,12 +1978,18 @@ import { Camera } from './camera.js';
           lHip = 0; rHip = 0; lKnee = 0; rKnee = 0;
         }
       } else {
-        const idle = Math.sin(p * 0.9);
-        la = 0.12 + idle * 0.08;
-        ra = 0.12 - idle * 0.08;
-        la2 = 0.28; ra2 = 0.28;
-        lHip = 0; rHip = 0; lKnee = 0; rKnee = 0;
-        head.y += idle * 1.2;
+        const motion = reduceMotion ? 0.35 : 1;
+        const idle = Math.sin(p * 0.75);
+        const sway = Math.sin(p * 0.37);
+        la = -0.2 + idle * 0.05 * motion;
+        ra = 0.22 - idle * 0.05 * motion;
+        la2 = 0.22 + idle * 0.03 * motion;
+        ra2 = 0.24 - idle * 0.03 * motion;
+        lHip = -0.02 + sway * 0.02 * motion;
+        rHip = 0.04 - sway * 0.02 * motion;
+        lKnee = -(0.18 + (0.5 + sway * 0.5) * 0.12 * motion);
+        rKnee = -(0.06 + (0.5 - sway * 0.5) * 0.08 * motion);
+        head.y += idle * 0.9 * motion;
       }
 
       if (this.dragging) {
@@ -1987,7 +2025,7 @@ import { Camera } from './camera.js';
         }
       }
 
-      const upperArm = 24 * s, lowerArm = 22 * s;
+      const upperArm = 21 * s, lowerArm = 19 * s;
       const upperLeg = 22 * s, lowerLeg = 22 * s;
 
       function limb(origin, a1, a2, l1, l2) {
@@ -1996,31 +2034,75 @@ import { Camera } from './camera.js';
         return [origin, j, e];
       }
 
+      const shoulder = lerpPt(chest, neck, 0.35);
+      const shoulderF = { x: shoulder.x + f * 2.4 * s, y: shoulder.y + 0.6 * s };
+      const shoulderB = { x: shoulder.x - f * 2.4 * s, y: shoulder.y - 0.6 * s };
+      const hipF = { x: hip.x + f * 2.2 * s, y: hip.y };
+      const hipB = { x: hip.x - f * 2.2 * s, y: hip.y - 0.4 * s };
+
       let armL, armR, legL, legR;
 
       if (crawling) {
         const a = Math.sin(p);
         const b2 = Math.sin(p + Math.PI);
-        armL = [neck,
-          { x: neck.x + f * (13 + a * 8) * s, y: -9 * s },
-          { x: neck.x + f * (28 + a * 17) * s, y: -4 * s }];
-        armR = [neck,
-          { x: neck.x + f * (13 + b2 * 8) * s, y: -9 * s },
-          { x: neck.x + f * (28 + b2 * 17) * s, y: -4 * s }];
-        legL = [hip,
+        armL = [shoulderB,
+          { x: shoulderB.x + f * (13 + a * 8) * s, y: -9 * s },
+          { x: shoulderB.x + f * (28 + a * 17) * s, y: -4 * s }];
+        armR = [shoulderF,
+          { x: shoulderF.x + f * (13 + b2 * 8) * s, y: -9 * s },
+          { x: shoulderF.x + f * (28 + b2 * 17) * s, y: -4 * s }];
+        legL = [hipB,
           { x: -f * (17 + b2 * 7) * s, y: (-11 - Math.max(0, b2) * 4) * s },
           { x: -f * (33 + b2 * 11) * s, y: (-4 - Math.max(0, b2) * 8) * s }];
-        legR = [hip,
+        legR = [hipF,
           { x: -f * (17 + a * 7) * s, y: (-11 - Math.max(0, a) * 4) * s },
           { x: -f * (33 + a * 11) * s, y: (-4 - Math.max(0, a) * 8) * s }];
       } else {
-        armL = limb(neck, la * f, la2 * f, upperArm, lowerArm);
-        armR = limb(neck, ra * f, ra2 * f, upperArm, lowerArm);
-        legL = limb(hip, lHip * f, lKnee * f, upperLeg, lowerLeg);
-        legR = limb(hip, rHip * f, rKnee * f, upperLeg, lowerLeg);
+        armL = limb(shoulderB, la * f, la2 * f, upperArm, lowerArm);
+        armR = limb(shoulderF, ra * f, ra2 * f, upperArm, lowerArm);
+        legL = limb(hipB, lHip * f, lKnee * f, upperLeg, lowerLeg);
+        legR = limb(hipF, rHip * f, rKnee * f, upperLeg, lowerLeg);
       }
 
-      return { head, neck, hip, armL, armR, legL, legR, headR, s, f };
+      let footStyleL = 'flat', footStyleR = 'flat';
+      if (crawling) {
+        footStyleL = footStyleR = 'back';
+      } else if (this.blown) {
+        footStyleL = footStyleR = this.blown.phase === 'getup' ? 'flat' : 'point';
+      } else if (fightingPose) {
+        const cs = this.combat.state;
+        if (cs === 'kick' || (cs === 'combo' && (this.combat.comboStep || 0) === 2)) footStyleL = 'point';
+        if (cs === 'flyingkick' || cs === 'spinkick' || cs === 'sweep') footStyleL = footStyleR = 'point';
+        if (cs === 'launched' || cs === 'knockdown') footStyleL = footStyleR = 'point';
+      } else if (b === 'run') {
+        if (lKnee < -0.9) footStyleL = 'point';
+        if (rKnee < -0.9) footStyleR = 'point';
+      } else if (b === 'walk') {
+        if (lKnee < -0.65) footStyleL = 'point';
+        if (rKnee < -0.65) footStyleR = 'point';
+      } else if (b === 'jump') {
+        const airborne = this.y < H - 72 - 2;
+        if (airborne) footStyleL = footStyleR = 'point';
+      }
+
+      const footLen = 7.5 * s;
+      function toeFor(ankle, style) {
+        let ang = f * Math.PI * 0.5;
+        if (style === 'point') ang = f * (Math.PI * 0.5 - 0.55);
+        else if (style === 'flex') ang = f * (Math.PI * 0.5 + 0.3);
+        else if (style === 'back') ang = f * Math.PI * 1.5;
+        return { x: ankle.x + Math.sin(ang) * footLen, y: ankle.y + Math.cos(ang) * footLen };
+      }
+      const extendHand = pts => ({
+        x: pts[2].x + (pts[2].x - pts[1].x) * 0.05,
+        y: pts[2].y + (pts[2].y - pts[1].y) * 0.05
+      });
+      const handL = extendHand(armL);
+      const handR = extendHand(armR);
+      const toeL = toeFor(legL[2], footStyleL);
+      const toeR = toeFor(legR[2], footStyleR);
+
+      return { head, neck, chest, hip, armL, armR, legL, legR, handL, handR, toeL, toeR, headR, s, f };
     }
 
     _tickFace(dt) {
@@ -2164,8 +2246,8 @@ import { Camera } from './camera.js';
 
     drawShadow(ctx, groundY) {
       const pose = this._renderPose || this.pose();
-      const { head, neck, hip, armL, armR, legL, legR } = pose;
-      const pts = [head, neck, hip, ...armL, ...armR, ...legL, ...legR];
+      const { head, neck, chest, hip, armL, armR, legL, legR, handL, handR, toeL, toeR } = pose;
+      const pts = [head, neck, chest, hip, ...armL, ...armR, handL, handR, ...legL, ...legR, toeL, toeR];
       let minX = Infinity, maxX = -Infinity;
       for (const p of pts) {
         if (p.x < minX) minX = p.x;
@@ -2257,29 +2339,28 @@ import { Camera } from './camera.js';
       const total = totals[cs];
       if (!total) return;
       const elapsed = total - this.combat.t;
-      let start, end, limb;
+      let start, end, limb, tip;
       if (cs === 'combo') {
         const step = this.combat.comboStep || 0;
-        if (step === 0) { start = 0.04; end = 0.22; limb = pose.armR; }
-        else if (step === 1) { start = 0.3; end = 0.46; limb = pose.armL; }
-        else { start = 0.58; end = 0.8; limb = pose.legL; }
+        if (step === 0) { start = 0.04; end = 0.22; limb = pose.armR; tip = pose.handR; }
+        else if (step === 1) { start = 0.3; end = 0.46; limb = pose.armL; tip = pose.handL; }
+        else { start = 0.58; end = 0.8; limb = pose.legL; tip = pose.toeL; }
       } else if (cs === 'punch') {
-        start = 0.08; end = 0.23; limb = pose.armR;
+        start = 0.08; end = 0.23; limb = pose.armR; tip = pose.handR;
       } else if (cs === 'kick') {
-        start = 0.16; end = 0.32; limb = pose.legL;
+        start = 0.16; end = 0.32; limb = pose.legL; tip = pose.toeL;
       } else if (cs === 'uppercut') {
-        start = 0.14; end = 0.3; limb = pose.armR;
+        start = 0.14; end = 0.3; limb = pose.armR; tip = pose.handR;
       } else if (cs === 'sweep') {
-        start = 0.12; end = 0.28; limb = pose.legL;
+        start = 0.12; end = 0.28; limb = pose.legL; tip = pose.toeL;
       } else if (cs === 'flyingkick') {
-        start = 0.16; end = 0.5; limb = pose.legL;
+        start = 0.16; end = 0.5; limb = pose.legL; tip = pose.toeL;
       } else {
-        start = 0.12; end = 0.4; limb = pose.legL;
+        start = 0.12; end = 0.4; limb = pose.legL; tip = pose.toeL;
       }
       const k = Math.sin(Math.PI * clamp((elapsed - start) / (end - start), 0, 1));
       if (k <= 0.04) return;
       const joint = limb[1];
-      const tip = limb[2];
       const len = Math.hypot(tip.x - joint.x, tip.y - joint.y);
       if (len < 8) return;
       const base = Math.atan2(tip.y - joint.y, tip.x - joint.x);
@@ -2303,7 +2384,7 @@ import { Camera } from './camera.js';
 
     draw(ctx) {
       const pose = this._renderPose || this.pose();
-      const { head, neck, hip, armL, armR, legL, legR, headR } = pose;
+      const { head, neck, chest, hip, armL, armR, legL, legR, handL, handR, toeL, toeR, headR } = pose;
 
       if (this.trail.length) {
         for (let i = 0; i < this.trail.length; i++) {
@@ -2329,10 +2410,21 @@ import { Camera } from './camera.js';
             ctx.lineTo(pts[2].x, pts[2].y);
             ctx.stroke();
           }
+          function ghostSegment(a, b) {
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.stroke();
+          }
           ghostLimb(gp.legL); ghostLimb(gp.legR);
           ghostLimb(gp.armL); ghostLimb(gp.armR);
+          if (gp.handL) ghostSegment(gp.armL[2], gp.handL);
+          if (gp.handR) ghostSegment(gp.armR[2], gp.handR);
+          if (gp.toeL) ghostSegment(gp.legL[2], gp.toeL);
+          if (gp.toeR) ghostSegment(gp.legR[2], gp.toeR);
           ctx.beginPath();
           ctx.moveTo(gp.hip.x, gp.hip.y);
+          if (gp.chest) ctx.lineTo(gp.chest.x, gp.chest.y);
           ctx.lineTo(gp.neck.x, gp.neck.y);
           ctx.stroke();
           ctx.beginPath();
@@ -2384,14 +2476,33 @@ import { Camera } from './camera.js';
         ctx.lineTo(pts[2].x, pts[2].y);
         ctx.stroke();
       }
+      function strokeSegment(a, b) {
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+      function fist(pt) {
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, Math.max(1.4, 2.1 * pose.s), 0, Math.PI * 2);
+        ctx.fillStyle = ctx.strokeStyle;
+        ctx.fill();
+      }
 
       strokeLimb(legL);
       strokeLimb(legR);
       strokeLimb(armL);
       strokeLimb(armR);
+      strokeSegment(legL[2], toeL);
+      strokeSegment(legR[2], toeR);
+      strokeSegment(armL[2], handL);
+      strokeSegment(armR[2], handR);
+      fist(handL);
+      fist(handR);
 
       ctx.beginPath();
       ctx.moveTo(hip.x, hip.y);
+      ctx.lineTo(chest.x, chest.y);
       ctx.lineTo(neck.x, neck.y);
       ctx.stroke();
 
@@ -2445,12 +2556,16 @@ import { Camera } from './camera.js';
       const fl = pose.legL[2], fr = pose.legR[2];
       if (Math.hypot(px - (this.x + fl.x), py - (this.y + fl.y)) < 14) return true;
       if (Math.hypot(px - (this.x + fr.x), py - (this.y + fr.y)) < 14) return true;
+      if (Math.hypot(px - (this.x + pose.toeL.x), py - (this.y + pose.toeL.y)) < 11) return true;
+      if (Math.hypot(px - (this.x + pose.toeR.x), py - (this.y + pose.toeR.y)) < 11) return true;
+      if (Math.hypot(px - (this.x + pose.handL.x), py - (this.y + pose.handL.y)) < 10) return true;
+      if (Math.hypot(px - (this.x + pose.handR.x), py - (this.y + pose.handR.y)) < 10) return true;
       return false;
     }
 
     bounds() {
       const p = this.pose();
-      const pts = [p.head, p.neck, p.hip, ...p.armL, ...p.armR, ...p.legL, ...p.legR];
+      const pts = [p.head, p.neck, p.chest, p.hip, ...p.armL, ...p.armR, p.handL, p.handR, ...p.legL, ...p.legR, p.toeL, p.toeR];
       let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
       for (const pt of pts) {
         if (pt.x < x0) x0 = pt.x;

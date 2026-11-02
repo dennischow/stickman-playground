@@ -7,6 +7,7 @@ Built with vanilla JavaScript and the Canvas 2D API, bundled with Vite. No game 
 ## Features
 
 - **Procedural stick figures** — every pose is computed from limb angles, so motion is smooth and resolution-independent.
+- **Articulated poses** — a split hip → chest → neck spine, shoulder and hip anchors, and visible hands and feet give each stance a readable skeleton. Combat uses a chin-high guard, chambered kicks, and hip-driven punches.
 - **Motion behaviors** — idle, walk, run, crawl, and a physically simulated jump with crouch, air, and landing phases.
 - **Individual movement** — each figure gets its own walk/run speed, jump height, crouch timing, and landing rest, so a crowd never moves in lockstep.
 - **Motion polish** — smoothed frame-to-frame velocity drives subtle head, torso, and arm lag; landings squash and settle; footsteps kick up dust; fast strikes leave short smear arcs. All of it respects `prefers-reduced-motion`.
@@ -94,11 +95,13 @@ The scene is rendered once to an offscreen canvas on resize or scene change, so 
 
 ### The stick figure model
 
-`StickFigure` stores position, facing, behavior, animation phase, velocity, and combat state. Its `pose()` method blends limb angles per behavior or combat state, while `draw()` renders the skeleton, expressive face, motion-trail ghosts, selection ring, power glyph, speed lines, and ground shadow.
+`StickFigure` stores position, facing, behavior, animation phase, velocity, and combat state. Its `pose()` method builds a split torso (hip → chest → neck) with shoulder and hip anchors, then attaches two-segment arms ending in hands and two-segment legs ending in feet and toes. `draw()` renders the articulated skeleton, expressive face, motion-trail ghosts, selection ring, power glyph, speed lines, and ground shadow.
+
+Idle uses a relaxed contrapposto with asymmetric knees and separated arms. Walk plants the front foot with a heel/toe stroke; run adds a flight phase, pointed feet, and stronger arm drive. Jump poses cover crouch, airborne extension, and a compressed landing. Combat stances use staggered feet, a chin-high guard, chambered knees, hip rotation into punches, and counterbalancing arms. These are visual poses only: hit ranges, timings, knockback, and AI balance are unchanged.
 
 Gravity is a constant `1500 px/s²`. Horizontal movement is driven by per-behavior speeds multiplied by a per-figure randomized `speedMul` (0.9–1.25), with facing flips at the screen margins. Voluntary jumps also vary in height (`jumpMul` 0.92–1.12), crouch duration, and landing rest. Faster runners lean slightly more and draw longer speed lines, so movement differences read clearly.
 
-Frame-to-frame position changes are smoothed into per-figure velocity and acceleration. Those values drive damped springs for the upper body, head, and hands (scaled down during authored attacks), add landing squash and settle, spawn small footstep dust puffs, and draw brief smear arcs on fast strikes. All of these are visual-only and are disabled or reduced when reduced motion is requested.
+Frame-to-frame position changes are smoothed into per-figure velocity and acceleration. Those values drive damped springs for the upper body, head, and arms (scaled down during authored attacks), add landing squash and settle, spawn small footstep dust puffs, and draw brief smear arcs on fast strikes. All of these are visual-only and are disabled or reduced when reduced motion is requested.
 
 ### Combat state machine
 
