@@ -104,6 +104,29 @@
     border-radius: 4px; padding: 4px 7px;
   }
   canvas { display: block; cursor: default; }
+  #letterbox {
+    position: fixed; inset: 0; z-index: 6; pointer-events: none;
+  }
+  #letterbox span {
+    position: absolute; left: 0; right: 0;
+    height: clamp(26px, 5.6vh, 52px);
+    background: #14120f;
+    transform: scaleY(0);
+    transition: transform .5s cubic-bezier(.65, 0, .35, 1);
+    will-change: transform;
+  }
+  #letterbox span:first-child {
+    top: var(--toolbar-h, 50px);
+    transform-origin: top;
+  }
+  #letterbox span:last-child {
+    bottom: 0;
+    transform-origin: bottom;
+  }
+  body[data-cinematic="on"] #letterbox span { transform: scaleY(1); }
+  body[data-cinematic="on"] #hint {
+    bottom: calc(clamp(26px, 5.6vh, 52px) + 10px);
+  }
   #vignette, #screentone, #grain {
     position: fixed; inset: 0; z-index: 4; pointer-events: none;
   }
@@ -154,5 +177,6 @@
   }
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
+    #letterbox span { transition: none !important; }
     #grain { animation: none !important; }
   }

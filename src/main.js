@@ -1,4 +1,5 @@
 import { audio } from './audio.js';
+import { Camera } from './camera.js';
 
 (() => {
   const canvas = document.getElementById('c');
@@ -14,12 +15,27 @@ import { audio } from './audio.js';
   const muteBtn = document.getElementById('muteBtn');
   const autonChk = document.getElementById('autonChk');
   const sceneSelect = document.getElementById('sceneSelect');
+  const cinematicBtn = document.getElementById('cinematicBtn');
+  const toolbar = document.getElementById('toolbar');
   let statusFlash = { text: '', until: 0 };
   function flashStatus(text, ms = 1800) {
     statusFlash = { text, until: performance.now() + ms };
   }
 
   let W = 0, H = 0, DPR = 1;
+  const camera = new Camera();
+  let cinematicOn = true;
+  try {
+    if (localStorage.getItem('stickman.cinematic') === '0') cinematicOn = false;
+  } catch (err) {}
+  const cine = {
+    introT: 0, introA: null, introB: null,
+    koT: 0, koFig: null,
+    blastT: 0, blastCaster: null, blastTarget: null
+  };
+  const CINE_INTRO = 1.0;
+  const CINE_KO = 1.2;
+  const CINE_BLAST = 1.1;
   const figures = [];
   let selected = null;
   let drag = null;
@@ -146,6 +162,11 @@ import { audio } from './audio.js';
     splats.length = 0;
   }
 
+  function syncToolbarHeight() {
+    if (!toolbar) return;
+    document.documentElement.style.setProperty('--toolbar-h', toolbar.offsetHeight + 'px');
+  }
+
   function resize() {
     DPR = Math.max(1, window.devicePixelRatio || 1);
     W = window.innerWidth;
@@ -154,6 +175,7 @@ import { audio } from './audio.js';
     canvas.height = Math.floor(H * DPR);
     canvas.style.width = W + 'px';
     canvas.style.height = H + 'px';
+    camera.resize(W, H);
     sceneDirty = true;
     splats.length = 0;
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
@@ -161,8 +183,12 @@ import { audio } from './audio.js';
     for (const f of figures) {
       if (f.y > groundY) f.y = groundY;
     }
+    syncToolbarHeight();
   }
   window.addEventListener('resize', resize);
+  if (toolbar && typeof ResizeObserver === 'function') {
+    new ResizeObserver(syncToolbarHeight).observe(toolbar);
+  }
   resize();
 
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -173,6 +199,135 @@ import { audio } from './audio.js';
   };
   const easeOut = t => 1 - (1 - t) * (1 - t);
   const pick = list => list[Math.floor(Math.random() * list.length)];
+
+  function syncCinematicUI() {
+    document.body.dataset.cinematic = cinematicOn ? 'on' : 'off';
+    if (cinematicBtn) {
+      cinematicBtn.setAttribute('aria-pressed', String(cinematicOn));
+      cinematicBtn.title = cinematicOn
+        ? 'Disable cinematic camera and letterbox (C)'
+        : 'Enable cinematic camera and letterbox (C)';
+    }
+  }
+
+  function setCinematic(on) {
+    cinematicOn = !!on;
+    try { localStorage.setItem('stickman.cinematic', cinematicOn ? '1' : '0'); } catch (err) {}
+    if (!cinematicOn) {
+      cine.introT = 0;
+      cine.koT = 0;
+      cine.blastT = 0;
+      camera.setTarget(W / 2, H / 2, 1, 0);
+    }
+    syncCinematicUI();
+  }
+
+  function cineStartDuel(a, b) {
+    if (!cinematicOn || reduceMotion) return;
+    cine.introT = CINE_INTRO;
+    cine.introA = a;
+    cine.introB = b;
+    cine.koT = 0;
+    cine.koFig = null;
+    cine.blastT = 0;
+    cine.blastTarget = null;
+  }
+
+  function cineKO(f) {
+    if (!cinematicOn || reduceMotion) return;
+    cine.koT = CINE_KO;
+    cine.koFig = f;
+  }
+
+  function cineBlast(caster, target) {
+    if (!cinematicOn || reduceMotion) return;
+    cine.blastT = CINE_BLAST;
+    cine.blastCaster = caster;
+    cine.blastTarget = target;
+    cine.introT = 0;
+    cine.koT = 0;
+  }
+
+  function cinematicGroupTarget(list, maxZoom = 1.06, pad = 520, tilt = 0, y = H * 0.53) {
+    if (!list.length) return { x: W / 2, y: H / 2, zoom: 1, rotation: 0 };
+    let minX = Infinity, maxX = -Infinity;
+    for (const f of list) {
+      if (f.x < minX) minX = f.x;
+      if (f.x > maxX) maxX = f.x;
+    }
+    const mid = (minX + maxX) / 2;
+    const span = maxX - minX + pad;
+    const zoom = clamp(W / Math.max(1, span), 1, maxZoom);
+    const rotation = tilt
+      ? clamp(((mid - W / 2) / Math.max(1, W)) * tilt, -0.018, 0.018)
+      : 0;
+    return { x: mid, y, zoom, rotation };
+  }
+
+  function updateCinematic(dt) {
+    if (drag || marquee) {
+      camera.snap = false;
+      camera.setTarget(camera.x, camera.y, camera.zoom, camera.rotation);
+      return;
+    }
+    if (!cinematicOn || reduceMotion) {
+      camera.snap = reduceMotion;
+      camera.follow = 7;
+      camera.setTarget(W / 2, H / 2, 1, 0);
+      return;
+    }
+    camera.snap = false;
+    if (cine.introT > 0) cine.introT = Math.max(0, cine.introT - dt);
+    if (cine.koT > 0) cine.koT = Math.max(0, cine.koT - dt);
+    if (cine.blastT > 0) cine.blastT = Math.max(0, cine.blastT - dt);
+
+    if (cine.blastT > 0 && cine.blastTarget) {
+      const target = cine.blastTarget;
+      const p = clamp(1 - cine.blastT / CINE_BLAST, 0, 1);
+      const zoom = 1.18 + 0.045 * Math.sin(Math.PI * p);
+      const casterX = cine.blastCaster ? cine.blastCaster.x : target.x;
+      const x = lerp(casterX, target.x, 0.72);
+      const rotation = clamp(((x - W / 2) / Math.max(1, W)) * 0.06, -0.02, 0.02);
+      camera.follow = 8;
+      camera.setTarget(x, H * 0.56, zoom, rotation);
+      return;
+    }
+
+    if (cine.koT > 0 && cine.koFig) {
+      const f = cine.koFig;
+      const p = clamp(1 - cine.koT / CINE_KO, 0, 1);
+      const zoom = 1.18 + 0.05 * Math.sin(Math.PI * p);
+      const rotation = clamp(((f.x - W / 2) / Math.max(1, W)) * 0.06, -0.02, 0.02);
+      camera.follow = 8;
+      camera.setTarget(f.x, H * 0.56, zoom, rotation);
+      return;
+    }
+
+    if (cine.introT > 0 && cine.introA && cine.introB &&
+        cine.introA.fighting && cine.introB.fighting) {
+      const p = clamp(1 - cine.introT / CINE_INTRO, 0, 1);
+      const t = cinematicGroupTarget([cine.introA, cine.introB], 1.2, 300, 0.05, H * 0.56);
+      t.zoom = Math.min(t.zoom, lerp(1.2, 1.15, smoothstep(0.2, 1, p)));
+      camera.follow = 6.5;
+      camera.setTarget(t.x, t.y, t.zoom, t.rotation);
+      return;
+    }
+    cine.introT = 0;
+
+    const fighters = figures.filter(f => f.fighting && !f.dragging);
+    if (fighters.length) {
+      const t = cinematicGroupTarget(fighters, 1.16, 420, 0.05, H * 0.55);
+      camera.follow = 6.5;
+      camera.setTarget(t.x, t.y, t.zoom, t.rotation);
+      return;
+    }
+
+    const focus = selectionList();
+    const list = focus.length ? focus : figures;
+    const t = cinematicGroupTarget(list, 1.06, 520, 0);
+    camera.follow = 4.5;
+    camera.setTarget(t.x, t.y, t.zoom, t.rotation);
+  }
 
   const newSpring = () => ({ x: 0, y: 0, vx: 0, vy: 0 });
   function stepSpring(s, tx, ty, stiffness, damping, dt, max) {
@@ -188,7 +343,10 @@ import { audio } from './audio.js';
 
   const lerpPt = (a, b, t) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
   const lerpChain = (a, b, t) => a.map((p, i) => lerpPt(p, b[i], t));
-  const panFor = x => clamp(((x / Math.max(1, W)) * 2 - 1) * 0.7, -0.7, 0.7);
+  const panFor = x => {
+    const sx = camera.worldToScreen(x, 0).x;
+    return clamp(((sx / Math.max(1, W)) * 2 - 1) * 0.7, -0.7, 0.7);
+  };
   function blendPose(a, b, t) {
     return {
       head: lerpPt(a.head, b.head, t),
@@ -599,6 +757,7 @@ import { audio } from './audio.js';
     a.startFight(b);
     b.startFight(a);
     a.trail.length = 0; b.trail.length = 0;
+    cineStartDuel(a, b);
     audio.duel(panFor((a.x + b.x) / 2));
   }
 
@@ -609,6 +768,11 @@ import { audio } from './audio.js';
     if (other && other.foe === f) {
       other.foe = null;
       other.stopFight();
+    }
+    if (!figures.some(o => o.fighting)) {
+      cine.introT = 0;
+      cine.koT = 0;
+      cine.blastT = 0;
     }
   }
 
@@ -638,6 +802,7 @@ import { audio } from './audio.js';
       partner.combat.spin = 0;
       partner.trail.length = 0;
     }
+    cineBlast(caster, target);
     flashStatus('Blast!', 1000);
   }
 
@@ -1118,6 +1283,7 @@ import { audio } from './audio.js';
       if (knocked || kbx >= 150) requestFlash(knocked ? 0.22 : 0.16, '#ffd54f');
       audio.hit(reactKind, clamp(0.75 + kbx / 420, 0.75, 1.35), panFor(midX));
       if (knocked && kbx >= 240) audio.ko(panFor(enemy.x));
+      if (knocked) cineKO(enemy);
     }
 
     updateFight(dt, groundY) {
@@ -2442,6 +2608,11 @@ import { audio } from './audio.js';
   }
   document.body.dataset.scene = sceneId;
 
+  syncCinematicUI();
+  if (cinematicBtn) {
+    cinematicBtn.addEventListener('click', () => setCinematic(!cinematicOn));
+  }
+
   function syncMuteUI() {
     if (!muteBtn) return;
     muteBtn.setAttribute('aria-pressed', String(audio.muted));
@@ -2534,6 +2705,12 @@ import { audio } from './audio.js';
       syncMuteUI();
       return;
     }
+    if (key === 'c') {
+      e.preventDefault();
+      setCinematic(!cinematicOn);
+      flashStatus(cinematicOn ? 'Cinematic on' : 'Cinematic off', 1100);
+      return;
+    }
     if (key === 'a') {
       e.preventDefault();
       addBtn.click();
@@ -2557,7 +2734,7 @@ import { audio } from './audio.js';
 
   function pointerPos(e) {
     const r = canvas.getBoundingClientRect();
-    return { x: e.clientX - r.left, y: e.clientY - r.top };
+    return camera.screenToWorld(e.clientX - r.left, e.clientY - r.top);
   }
 
   canvas.addEventListener('pointerdown', e => {
@@ -2687,13 +2864,17 @@ import { audio } from './audio.js';
 
     for (const f of figures) f._renderPose = f.pose();
 
-    if (sceneDirty) renderScene();
-    ctx.drawImage(sceneCanvas, 0, 0, W, H);
+    updateCinematic(rdt);
+    camera.update(rdt);
 
+    if (sceneDirty) renderScene();
+
+    ctx.save();
     if (shakeAmt > 0.4) {
-      ctx.save();
       ctx.translate((Math.random() - 0.5) * shakeAmt, (Math.random() - 0.5) * shakeAmt);
     }
+    camera.apply(ctx);
+    ctx.drawImage(sceneCanvas, 0, 0, W, H);
 
     drawSplats();
     for (const f of figures) f.drawShadow(ctx, groundY);
@@ -2716,8 +2897,9 @@ import { audio } from './audio.js';
 
     drawEffects();
 
+    ctx.restore();
+
     if (shakeAmt > 0.4) {
-      ctx.restore();
       shakeAmt *= Math.pow(0.0005, rdt);
     } else {
       shakeAmt = 0;

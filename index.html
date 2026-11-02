@@ -30,6 +30,7 @@
         <option value="highway">Highway</option>
         <option value="island">Island</option>
       </select>
+      <button id="cinematicBtn" type="button" aria-pressed="true" title="Cinematic camera and letterbox (C)">Cinematic</button>
     </div>
     <div class="sep"></div>
     <div class="group" id="actionGroup">
@@ -59,8 +60,9 @@
     <span id="powerGlyph" title="Superpower"></span>
   </div>
 </div>
-<div id="hint">drag to move · shift-click or box-select · 1–5 motion · F fight · P power · R revoke · A add · M mute</div>
+<div id="hint">drag to move · shift-click or box-select · 1–5 motion · F fight · P power · R revoke · A add · M mute · C cinema</div>
 <canvas id="c"></canvas>
+<div id="letterbox" aria-hidden="true"><span></span><span></span></div>
 <div id="vignette" aria-hidden="true"></div>
 <div id="screentone" aria-hidden="true"></div>
 <div id="grain" aria-hidden="true"></div>
