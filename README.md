@@ -17,6 +17,7 @@ Built with vanilla JavaScript and the Canvas 2D API, bundled with Vite. No game 
 - **Comic impact feel** — sprite-based dust and ink, persistent ground splats, starbursts, manga sound-effect words (`BAM`, `WHACK`, `K.O.`, `BOOM`), tinted flashes, and hit-stop.
 - **Synthesized audio** — a small WebAudio engine generates whooshes, impacts, footsteps, jumps, landings, blasts, and K.O. sounds. No audio files, with stereo panning by on-screen position and a persisted mute setting.
 - **Cinematic camera** — a damped camera adds gentle idle framing, duel intro push-in, fight follow, K.O. focus, and blast tracking, with letterbox bars and a persisted toggle. Pointer input is inverse-transformed, so selection and dragging stay accurate while the camera moves.
+- **Multi-level stage** — a paper/ink mezzanine and staircase give the playground vertical space: figures climb stairs, jump between floors, fall off edges, and can be dragged onto either level. Duels stay on the same floor.
 - **Six scenes** — blank paper plus five photo backgrounds (lake, factory, bridge, highway, floating island), desaturated behind a paper veil. The selection persists via `localStorage`.
 - **Selection & dragging** — click, shift/meta/ctrl-click to multi-select, drag to move a group, or marquee box-select.
 - **Keyboard shortcuts** — `1–5` for motion, `F` fight, `P` power, `R` revoke, `A` add, `M` mute, `C` cinematic.
@@ -105,7 +106,7 @@ Frame-to-frame position changes are smoothed into per-figure velocity and accele
 
 ### Combat state machine
 
-When two figures of different colors fight, `startDuel()` points them at each other. `updateFight()` runs a per-figure state machine:
+When two figures of different colors fight on the same floor, `startDuel()` locks them to that floor and points them at each other. The fight button only pairs enemies on the selected figure's floor, and knockback stays inside that floor's bounds. `updateFight()` runs a per-figure state machine:
 
 ```
 ready → approach → punch / kick / combo / spinkick / sweep / uppercut / flyingkick
@@ -122,6 +123,12 @@ ready → approach → punch / kick / combo / spinkick / sweep / uppercut / flyi
 ### Scenes
 
 Scenes are declared in `SCENES` in [`src/main.js`](src/main.js). Photo images are preloaded, cover-scaled, desaturated with a canvas filter, and veiled with the paper color. The chosen scene is saved to `localStorage` under `stickman.scene`.
+
+### Level and surfaces
+
+[`src/level.js`](src/level.js) defines the stage geometry: a ground floor, a back-right mezzanine, and a staircase connecting them. `surfaceAt(x, currentY)` returns the walkable height under a figure with a small step-up tolerance, `floorAt(x, y)` identifies the ground, mezzanine, or stairs, and `floorBounds(floor)` keeps duels on their floor. Stairs collide as a smooth ramp but draw as discrete steps, so feet follow the climb without stair-stepping jitter.
+
+Figures query the level every frame instead of using a fixed ground line. Walking follows the surface, jumps and falls land on the surface below, and walking off the mezzanine edge drops to the ground. Dragging can place figures on either level; dropping over an edge falls. The level is drawn into the cached scene, so it works over both plain paper and the photo backgrounds. New ground figures spawn clear of the staircase footprint.
 
 ### Cinematic camera
 
@@ -156,6 +163,7 @@ stickman-playground/
 ├── src/
 │   ├── main.js                # Game logic, rendering, input, AI
 │   ├── camera.js              # Damped cinematic camera + screen/world transforms
+│   ├── level.js               # Multi-level stage geometry and surface queries
 │   ├── audio.js               # Synthesized WebAudio sound engine
 │   └── style.css              # Paper-themed UI, responsive layout
 └── public/

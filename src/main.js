@@ -1,5 +1,6 @@
 import { audio } from './audio.js';
 import { Camera } from './camera.js';
+import { Level } from './level.js';
 
 (() => {
   const canvas = document.getElementById('c');
@@ -24,6 +25,7 @@ import { Camera } from './camera.js';
 
   let W = 0, H = 0, DPR = 1;
   const camera = new Camera();
+  const level = new Level();
   let cinematicOn = true;
   try {
     if (localStorage.getItem('stickman.cinematic') === '0') cinematicOn = false;
@@ -79,7 +81,7 @@ import { Camera } from './camera.js';
   }
 
   function drawGround(c, photo) {
-    const gy = H - 70;
+    const gy = level.groundY;
     c.save();
     if (photo) {
       c.strokeStyle = 'rgba(247, 246, 242, 0.62)';
@@ -121,10 +123,12 @@ import { Camera } from './camera.js';
       sceneCtx.fillStyle = bg;
       sceneCtx.fillRect(0, 0, W, H);
       sceneCtx.globalAlpha = 1;
+      level.draw(sceneCtx);
       drawGround(sceneCtx, true);
     } else {
       sceneCtx.fillStyle = bg;
       sceneCtx.fillRect(0, 0, W, H);
+      level.draw(sceneCtx);
       drawGround(sceneCtx, false);
     }
     sceneDirty = false;
@@ -176,12 +180,13 @@ import { Camera } from './camera.js';
     canvas.style.width = W + 'px';
     canvas.style.height = H + 'px';
     camera.resize(W, H);
+    level.resize(W, H);
     sceneDirty = true;
     splats.length = 0;
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    const groundY = H - 70;
     for (const f of figures) {
-      if (f.y > groundY) f.y = groundY;
+      const sy = level.surfaceAt(f.x, f.y + 8);
+      if (f.y > sy) f.y = sy;
     }
     syncToolbarHeight();
   }
@@ -759,6 +764,14 @@ import { Camera } from './camera.js';
   }
 
   function startDuel(a, b) {
+    const floor = level.floorAt(a.x, a.y);
+    a.combatFloor = floor;
+    b.combatFloor = floor;
+    const floorY = floor === 1 ? level.mezzY : level.groundY;
+    a.y = floorY;
+    b.y = floorY;
+    a.vy = 0;
+    b.vy = 0;
     a.startFight(b);
     b.startFight(a);
     a.trail.length = 0; b.trail.length = 0;
@@ -835,6 +848,7 @@ import { Camera } from './camera.js';
       this.eyeR = 4.5;
       this.fighting = false;
       this.foe = null;
+      this.combatFloor = null;
       this.trail = [];
       this.combat = {
         state: 'idle', t: 0, cd: 0.4 + Math.random() * 0.6,
@@ -894,6 +908,7 @@ import { Camera } from './camera.js';
     stopFight() {
       this.fighting = false;
       this.foe = null;
+      this.combatFloor = null;
       this.trail.length = 0;
       this.combat = { state: 'idle', t: 0, cd: 0, hitDone: false, kbx: 0, spin: 0, hits: 0, snap: false, react: null, landed: false };
     }
@@ -909,12 +924,12 @@ import { Camera } from './camera.js';
       }
     }
 
-    randomizeBehavior(dt) {
+    randomizeBehavior(dt, groundY) {
       if (this.dragging) return;
       if (this.fighting) return;
       if (this.blown) return;
       if (!autonChk.checked) return;
-      if (this.y < H - 72) return;
+      if (this.y < groundY - 2) return;
       this.think -= dt;
       if (this.think > 0) return;
       this.think = 1.5 + Math.random() * 3;
@@ -929,14 +944,21 @@ import { Camera } from './camera.js';
       }
     }
 
-    update(dt, groundY) {
+    update(dt, level) {
       if (this.landT > 0) this.landT = Math.max(0, this.landT - dt);
       const px = this.x;
       const py = this.y;
-      this._update(dt, groundY);
+      this._update(dt, level);
       this._tickBlend(dt);
       this._trackMotion(dt, px, py);
       this._tickSecondary(dt);
+    }
+
+    _surfaceY(level) {
+      if (this.fighting && this.combatFloor !== null && !this.blown) {
+        return this.combatFloor === 1 ? level.mezzY : level.groundY;
+      }
+      return level.surfaceAt(this.x, this.y);
     }
 
     _trackMotion(dt, px, py) {
@@ -1017,9 +1039,10 @@ import { Camera } from './camera.js';
       };
     }
 
-    _update(dt, groundY) {
+    _update(dt, level) {
+      const groundY = this._surfaceY(level);
       this._tickFace(dt);
-      this.randomizeBehavior(dt);
+      this.randomizeBehavior(dt, groundY);
       const speed = this.speedMul;
       if (this.powerCd > 0) this.powerCd -= dt;
       if (this.pushAnim > 0) this.pushAnim -= dt;
@@ -1144,6 +1167,10 @@ import { Camera } from './camera.js';
         return;
       }
 
+      if (!this.fighting && this.vy === 0 && this.behavior !== 'jump' &&
+          Math.abs(groundY - this.y) <= 16) {
+        this.y = groundY;
+      }
       this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 10));
       if (this.y < groundY || this.vy < 0) {
         this.vy += 1500 * dt;
@@ -1158,7 +1185,7 @@ import { Camera } from './camera.js';
       }
 
       if (this.fighting) {
-        this.updateFight(dt, groundY);
+        this.updateFight(dt, level);
         return;
       }
 
@@ -1287,7 +1314,7 @@ import { Camera } from './camera.js';
         spawnWord(midX, hitY - 36, pick(['POW', 'WHACK']), 0.95);
       }
       if (knocked || kbx >= 150) {
-        spawnSplat(midX + dir * 8, H - 70, clamp(0.85 + kbx / 500, 0.85, 1.5));
+        spawnSplat(midX + dir * 8, enemy._surfaceY(level), clamp(0.85 + kbx / 500, 0.85, 1.5));
       }
       if (knocked || kbx >= 150) requestFlash(knocked ? 0.22 : 0.16, '#ffd54f');
       audio.hit(reactKind, clamp(0.75 + kbx / 420, 0.75, 1.35), panFor(midX));
@@ -1295,7 +1322,11 @@ import { Camera } from './camera.js';
       if (knocked) cineKO(enemy);
     }
 
-    updateFight(dt, groundY) {
+    updateFight(dt, level) {
+      const groundY = this._surfaceY(level);
+      const fb = level.floorBounds(this.combatFloor === 1 ? 1 : 0);
+      const xMin = fb.x0;
+      const xMax = fb.x1;
       const c = this.combat;
       c.t -= dt;
       this.phase += dt * 8;
@@ -1321,7 +1352,7 @@ import { Camera } from './camera.js';
       if (!enemy) {
         c.state = 'wander';
         this.x += this.facing * 50 * this.speedMul * dt;
-        this.x = clamp(this.x, 50, W - 50);
+        this.x = clamp(this.x, xMin, xMax);
         if (this.x <= 50) this.facing = 1;
         if (this.x >= W - 50) this.facing = -1;
         return;
@@ -1335,7 +1366,7 @@ import { Camera } from './camera.js';
       const downStates = ['knockdown', 'getup', 'launched', 'stagger'];
       if (dist < 26 && !downStates.includes(c.state) && !downStates.includes(enemy.combat.state)) {
         this.x -= this.facing * (26 - dist) * 0.5;
-        this.x = clamp(this.x, 50, W - 50);
+        this.x = clamp(this.x, xMin, xMax);
       }
 
       if (enemy.blown) {
@@ -1406,14 +1437,14 @@ import { Camera } from './camera.js';
           c.state = 'ready';
           c.cd = 0.2 + Math.random() * 0.4;
         }
-        this.x = clamp(this.x, 50, W - 50);
+        this.x = clamp(this.x, xMin, xMax);
         return;
       }
 
       if (c.state === 'dodge') {
         this.x += this.facing * -95 * dt;
         if (c.t <= 0) { c.state = 'ready'; c.cd = 0.45 + Math.random() * 0.45; }
-        this.x = clamp(this.x, 50, W - 50);
+        this.x = clamp(this.x, xMin, xMax);
         return;
       }
 
@@ -1437,7 +1468,7 @@ import { Camera } from './camera.js';
         }
         if (c.hitDone && airborne) {
           this.x += c.lungeV * dt;
-          this.x = clamp(this.x, 50, W - 50);
+          this.x = clamp(this.x, xMin, xMax);
           if (!c.kickDone && elapsed > 0.24 && Math.abs(enemy.x - this.x) <= 130) {
             c.kickDone = true;
             this.landHit(enemy, { range: 130, kbx: 280, kdChance: 0.4, freeze: 0.07, shake: 10, starScale: 1.4 });
@@ -1457,7 +1488,7 @@ import { Camera } from './camera.js';
           c.state = 'ready'; c.cd = 0.4;
           c.hitDone = false; c.kickDone = false;
         }
-        this.x = clamp(this.x, 50, W - 50);
+        this.x = clamp(this.x, xMin, xMax);
         return;
       }
 
@@ -1476,7 +1507,7 @@ import { Camera } from './camera.js';
           c.hitDone = false;
           c.cd = 0.5 + Math.random() * 0.4;
         }
-        this.x = clamp(this.x, 50, W - 50);
+        this.x = clamp(this.x, xMin, xMax);
         return;
       }
 
@@ -1495,7 +1526,7 @@ import { Camera } from './camera.js';
           c.hitDone = false;
           c.cd = 0.55 + Math.random() * 0.4;
         }
-        this.x = clamp(this.x, 50, W - 50);
+        this.x = clamp(this.x, xMin, xMax);
         return;
       }
 
@@ -1525,7 +1556,7 @@ import { Camera } from './camera.js';
           c.hitDone = false;
           c.cd = 0.55 + Math.random() * 0.4;
         }
-        this.x = clamp(this.x, 50, W - 50);
+        this.x = clamp(this.x, xMin, xMax);
         return;
       }
 
@@ -1550,7 +1581,7 @@ import { Camera } from './camera.js';
           c.hitDone = false;
           c.cd = 0.45 + Math.random() * 0.5;
         }
-        this.x = clamp(this.x, 50, W - 50);
+        this.x = clamp(this.x, xMin, xMax);
         return;
       }
 
@@ -1577,7 +1608,7 @@ import { Camera } from './camera.js';
           c.hits = 0;
           c.cd = 0.6 + Math.random() * 0.5;
         }
-        this.x = clamp(this.x, 50, W - 50);
+        this.x = clamp(this.x, xMin, xMax);
         return;
       }
 
@@ -2244,7 +2275,8 @@ import { Camera } from './camera.js';
       ctx.restore();
     }
 
-    drawShadow(ctx, groundY) {
+    drawShadow(ctx, level) {
+      const groundY = this._surfaceY(level);
       const pose = this._renderPose || this.pose();
       const { head, neck, chest, hip, armL, armR, legL, legR, handL, handR, toeL, toeR } = pose;
       const pts = [head, neck, chest, hip, ...armL, ...armR, handL, handR, ...legL, ...legR, toeL, toeR];
@@ -2588,6 +2620,15 @@ import { Camera } from './camera.js';
     return f;
   }
 
+  function groundSpawnX() {
+    const margin = 60;
+    for (let i = 0; i < 8; i++) {
+      const x = margin + Math.random() * Math.max(1, W - margin * 2);
+      if (x < level.stairX0 - 30 || x > level.stairX1 + 30) return x;
+    }
+    return Math.max(margin, level.stairX0 - 80);
+  }
+
   function selectionList() {
     return figures.filter(f => f.selected);
   }
@@ -2705,9 +2746,7 @@ import { Camera } from './camera.js';
   }
 
   addBtn.addEventListener('click', () => {
-    const margin = 60;
-    const x = margin + Math.random() * Math.max(1, W - margin * 2);
-    addFigure(x, H - 70, colorPicker.value);
+    addFigure(groundSpawnX(), level.groundY, colorPicker.value);
   });
 
   colorPicker.addEventListener('input', () => {
@@ -2771,10 +2810,16 @@ import { Camera } from './camera.js';
         if (selected.fighting) {
           endDuel(selected);
         } else {
+          const selectedFloor = level.floorAt(selected.x, selected.y);
+          if (selectedFloor < 0) {
+            flashStatus('Move to a floor to start a duel', 1800);
+            return;
+          }
           const enemies = figures.filter(f =>
-            f !== selected && selected.isEnemy(f) && !f.fighting && !f.blown && !f.dragging);
+            f !== selected && selected.isEnemy(f) && !f.fighting && !f.blown && !f.dragging &&
+            level.floorAt(f.x, f.y) === selectedFloor);
           if (!enemies.length) {
-            flashStatus('No enemy to fight — add a figure of another color', 1800);
+            flashStatus('No enemy on this floor — add or move another color here', 2200);
             return;
           }
           let nearest = enemies[0];
@@ -2950,7 +2995,7 @@ import { Camera } from './camera.js';
   canvas.addEventListener('pointerup', endDrag);
   canvas.addEventListener('pointercancel', endDrag);
 
-  addFigure(W / 2, H - 70, '#e53935');
+  addFigure(Math.max(80, level.stairX0 - 120), level.groundY, '#e53935');
 
   let last = performance.now();
   let lastUITime = 0;
@@ -2958,7 +3003,6 @@ import { Camera } from './camera.js';
   function frame(now) {
     const rdt = Math.min(0.05, (now - last) / 1000);
     last = now;
-    const groundY = H - 70;
 
     let dt = rdt;
     if (freezeT > 0) {
@@ -2972,7 +3016,7 @@ import { Camera } from './camera.js';
     }
 
     if (dt > 0) {
-      for (const f of figures) f.update(dt, groundY);
+      for (const f of figures) f.update(dt, level);
       updateEffects(dt);
       updateSplats(dt);
     }
@@ -2992,7 +3036,7 @@ import { Camera } from './camera.js';
     ctx.drawImage(sceneCanvas, 0, 0, W, H);
 
     drawSplats();
-    for (const f of figures) f.drawShadow(ctx, groundY);
+    for (const f of figures) f.drawShadow(ctx, level);
     for (const f of figures) f.draw(ctx);
 
     if (marquee && marquee.moved) {
