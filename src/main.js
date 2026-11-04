@@ -7,10 +7,9 @@ import { Level } from './level.js';
   const ctx = canvas.getContext('2d');
   const addBtn = document.getElementById('addBtn');
   const colorPicker = document.getElementById('colorPicker');
-  const actionButtons = [...document.querySelectorAll('#toolbar [data-action]')];
+  const actionButtons = [...document.querySelectorAll('#toolbar [data-action], #dock [data-action]')];
   const powerBtn = actionButtons.find(b => b.dataset.action === 'power');
   const statusEl = document.getElementById('readoutText');
-  const selSwatch = document.getElementById('selSwatch');
   const powerGlyph = document.getElementById('powerGlyph');
   const revokeBtn = document.getElementById('revokeBtn');
   const muteBtn = document.getElementById('muteBtn');
@@ -18,6 +17,7 @@ import { Level } from './level.js';
   const sceneSelect = document.getElementById('sceneSelect');
   const cinematicBtn = document.getElementById('cinematicBtn');
   const toolbar = document.getElementById('toolbar');
+  const dock = document.getElementById('dock');
   let statusFlash = { text: '', until: 0 };
   function flashStatus(text, ms = 1800) {
     statusFlash = { text, until: performance.now() + ms };
@@ -207,6 +207,7 @@ import { Level } from './level.js';
 
   function syncCinematicUI() {
     document.body.dataset.cinematic = cinematicOn ? 'on' : 'off';
+    if (dock) dock.inert = !selected;
     if (cinematicBtn) {
       cinematicBtn.setAttribute('aria-pressed', String(cinematicOn));
       cinematicBtn.title = cinematicOn
@@ -2667,6 +2668,10 @@ import { Level } from './level.js';
     if (!selected && sel.length) selected = sel[sel.length - 1];
     const has = !!selected;
     const multi = sel.length > 1;
+    const compact = window.innerWidth <= 520;
+    const narrow = window.innerWidth <= 360;
+    document.body.dataset.selection = has ? 'some' : 'none';
+    if (dock) dock.inert = !has;
     for (const btn of actionButtons) {
       btn.disabled = !has;
       let on = false;
@@ -2677,7 +2682,9 @@ import { Level } from './level.js';
         const holder = has && selected.hasPower;
         btn.disabled = !has || selected.blown || (holder && selected.powerCd > 0);
         on = holder;
-        btn.textContent = holder ? 'Superpower' : 'Give Power';
+        btn.textContent = holder
+          ? (narrow ? 'Power' : 'Superpower')
+          : (narrow ? 'Power' : 'Give Power');
         btn.title = holder
           ? 'Blast the nearest figure into the wall (4s cooldown)'
           : 'Grant this figure the superpower';
@@ -2693,8 +2700,6 @@ import { Level } from './level.js';
       powerBtn.style.setProperty('--cd', cd.toFixed(3));
     }
 
-    selSwatch.hidden = !has;
-    if (has) selSwatch.style.background = selected.color;
     powerGlyph.className = '';
     if (has && selected.hasPower) {
       powerGlyph.className = selected.powerCd > 0 ? 'recharging' : 'charged';
@@ -2708,15 +2713,19 @@ import { Level } from './level.js';
     if (!has) {
       if (flashing) {
         statusEl.textContent = statusFlash.text;
+        statusEl.title = statusFlash.text;
       } else {
-        statusEl.textContent = figures.length
-          ? 'Click a figure to select'
-          : 'Add a figure to start';
+        const text = figures.length
+          ? (compact ? 'Click a figure' : 'Click a figure to select')
+          : (compact ? 'Add a figure' : 'Add a figure to start');
+        statusEl.textContent = text;
+        statusEl.title = text;
       }
       colorPicker.disabled = true;
     } else {
       if (flashing) {
         statusEl.textContent = statusFlash.text;
+        statusEl.title = statusFlash.text;
       } else {
         let mode;
         if (sel.some(f => f.fighting)) {
@@ -2726,9 +2735,13 @@ import { Level } from './level.js';
           mode = behaviors.size === 1 ? sel[0].behavior : 'mixed';
         }
         const suffix = sel.some(f => f.dragging) ? ' · drag' : '';
-        statusEl.textContent = multi
+        const fullText = multi
           ? `${sel.length} selected · ${mode}${suffix}`
           : `Selected · ${mode}${suffix}`;
+        statusEl.textContent = compact
+          ? (multi ? `${sel.length} selected` : `${mode}${suffix}`)
+          : fullText;
+        statusEl.title = fullText;
       }
       colorPicker.disabled = false;
       colorPicker.value = rgbToHex(selected.color);
@@ -2770,7 +2783,7 @@ import { Level } from './level.js';
   function syncMuteUI() {
     if (!muteBtn) return;
     muteBtn.setAttribute('aria-pressed', String(audio.muted));
-    muteBtn.textContent = audio.muted ? 'Muted' : 'Sound';
+    muteBtn.setAttribute('aria-label', audio.muted ? 'Unmute sound' : 'Mute sound');
     muteBtn.title = audio.muted ? 'Unmute sound (M)' : 'Mute sound (M)';
   }
   if (muteBtn) {
@@ -2790,9 +2803,9 @@ import { Level } from './level.js';
         if (!selected.hasPower) {
           selected.hasPower = true;
           audio.charge(panFor(selected.x));
-          flashStatus('Superpower granted! Click again to blast', 2200);
+          flashStatus('Power on', 2200);
         } else if (selected.powerCd > 0) {
-          flashStatus('Superpower recharging…');
+          flashStatus('Recharging');
         } else {
           let target = null, best = Infinity;
           for (const f of figures) {
@@ -2801,7 +2814,7 @@ import { Level } from './level.js';
             if (d < best) { best = d; target = f; }
           }
           if (!target) {
-            flashStatus('No one to blast');
+            flashStatus('No target');
           } else {
             blastFigure(selected, target, 4);
           }
@@ -2812,14 +2825,14 @@ import { Level } from './level.js';
         } else {
           const selectedFloor = level.floorAt(selected.x, selected.y);
           if (selectedFloor < 0) {
-            flashStatus('Move to a floor to start a duel', 1800);
+            flashStatus('Pick a floor', 1800);
             return;
           }
           const enemies = figures.filter(f =>
             f !== selected && selected.isEnemy(f) && !f.fighting && !f.blown && !f.dragging &&
             level.floorAt(f.x, f.y) === selectedFloor);
           if (!enemies.length) {
-            flashStatus('No enemy on this floor — add or move another color here', 2200);
+            flashStatus('No enemy', 2200);
             return;
           }
           let nearest = enemies[0];
@@ -2845,7 +2858,7 @@ import { Level } from './level.js';
     if (!selected || !selected.hasPower) return;
     selected.hasPower = false;
     selected.powerCd = 0;
-    flashStatus('Superpower removed', 1600);
+    flashStatus('Power off', 1600);
     updateUI();
   });
 
@@ -2868,7 +2881,7 @@ import { Level } from './level.js';
     if (key === 'c') {
       e.preventDefault();
       setCinematic(!cinematicOn);
-      flashStatus(cinematicOn ? 'Cinematic on' : 'Cinematic off', 1100);
+      flashStatus(cinematicOn ? 'Cinema on' : 'Cinema off', 1100);
       return;
     }
     if (key === 'a') {
