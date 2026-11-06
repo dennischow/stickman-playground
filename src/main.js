@@ -254,13 +254,13 @@ import { Level } from './level.js';
   }
 
   const SKY_KEYS = [
-    { h: 0, top: [76, 94, 128], bottom: [148, 154, 166], alpha: 0.78 },
-    { h: 5, top: [124, 136, 162], bottom: [220, 206, 194], alpha: 0.54 },
+    { h: 0, top: [18, 18, 48], bottom: [60, 52, 96], alpha: 0.94 },
+    { h: 5, top: [60, 56, 102], bottom: [160, 142, 172], alpha: 0.74 },
     { h: 7, top: [231, 226, 217], bottom: [248, 218, 192], alpha: 0.20 },
     { h: 12, top: [228, 237, 240], bottom: [251, 247, 237], alpha: 0.14 },
     { h: 17, top: [239, 228, 211], bottom: [248, 220, 193], alpha: 0.22 },
-    { h: 19, top: [120, 130, 158], bottom: [222, 188, 174], alpha: 0.54 },
-    { h: 24, top: [76, 94, 128], bottom: [148, 154, 166], alpha: 0.78 }
+    { h: 19, top: [58, 54, 100], bottom: [172, 144, 166], alpha: 0.72 },
+    { h: 24, top: [18, 18, 48], bottom: [60, 52, 96], alpha: 0.94 }
   ];
 
   function mixSkyColor(a, b, t) {
