@@ -13,6 +13,7 @@ Built with vanilla JavaScript and the Canvas 2D API, bundled with Vite. No game 
 - **Motion polish** — smoothed frame-to-frame velocity drives subtle head, torso, and arm lag; landings squash and settle; footsteps kick up dust; fast strikes leave short smear arcs. All of it respects `prefers-reduced-motion`.
 - **Autonomous mode** — figures randomly switch actions on their own, each with a randomized "think" timer.
 - **Kung-fu combat** — AI duels with approach, block, dodge, punch, kick, combo, spin kick, sweep, uppercut, flying kick, stagger, knockdown, launch, and get-up states. Hits use natural recoil poses and knockdowns fall, settle, and push back up continuously.
+- **Fighting styles** — each figure can switch between Brawler, Wing Chun, and Muay Thai. Wing Chun uses a centerline guard, chain punches, low heel kicks, and a compact parry; Muay Thai uses teep, roundhouse, knee, and elbow. Styles change guard poses, attack timing and range, and AI distance preferences.
 - **Superpower** — grant a figure the power, then blast the nearest figure into the wall with knockback, slow-motion, impact typography, ink splats, and screen shake.
 - **Comic impact feel** — sprite-based dust and ink, persistent ground splats, starbursts, manga sound-effect words (`BAM`, `WHACK`, `K.O.`, `BOOM`), tinted flashes, and hit-stop.
 - **Synthesized audio** — a small WebAudio engine generates whooshes, impacts, footsteps, jumps, landings, blasts, and K.O. sounds. No audio files, with stereo panning by on-screen position and a persisted mute setting.
@@ -77,6 +78,7 @@ Selection actions live in a floating dock at the bottom of the screen. It appear
 
 - **Motion** — set the selection to Idle, Crawl, Walk, Run, or Jump.
 - **Combat** — start/stop a duel, pick among several enemies, chase someone on another floor, and grant or use the superpower.
+- **Style** — choose Brawler, Wing Chun, or Muay Thai for the selection. Mixed selections show **Mixed**, the selector locks during a duel, and new figures inherit the last chosen style.
 
 ## How It Works
 
@@ -117,6 +119,8 @@ ready → approach → punch / kick / combo / spinkick / sweep / uppercut / flyi
 ```
 
 `landHit()` checks range, honors block/dodge, rolls for knockdown, applies knockback, and spawns hit effects, hit-stop, sound, and impact typography. Staggered figures recoil with a timed guard and recovery step. Knockdowns use a continuous knee-buckle → hip-drop → torso-rotate fall, land with dust and a thud, lie grounded with the head rotated, then push up through hands and crouch instead of popping upright. Facing is frozen while a figure is down or launched.
+
+Brawler keeps the original state set. Wing Chun and Muay Thai route their signature attacks through a shared `strike` state driven by the `STRIKES` table, so each move has its own wind-up, hit windows, range, knockback, and recovery. Wing Chun closes distance and favors chain punches, low kicks, and parries; Muay Thai uses teep and roundhouse at range and knee/elbow up close. Style is per figure, saved as `stickman.style`, and locked while a selected figure is dueling.
 
 ### Superpower
 

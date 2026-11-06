@@ -70,6 +70,16 @@
     <button type="button" data-action="fight" aria-pressed="false" title="Fight nearest enemy of another color (F)">Fight</button>
     <button type="button" data-action="power" title="Grant the power, then blast the nearest figure into the wall (P)">Give Power</button>
   </div>
+  <div class="dock-sep"></div>
+  <div class="dock-group">
+    <label class="dock-label" for="styleSelect">Style</label>
+    <select id="styleSelect" aria-label="Fighting style" title="Fighting style">
+      <option value="brawler">Brawler</option>
+      <option value="wingchun">Wing Chun</option>
+      <option value="muaythai">Muay Thai</option>
+      <option value="mixed" disabled>Mixed</option>
+    </select>
+  </div>
 </div>
 <canvas id="c"></canvas>
 <div id="letterbox" aria-hidden="true"><span></span><span></span></div>

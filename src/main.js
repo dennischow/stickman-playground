@@ -18,6 +18,7 @@ import { Level } from './level.js';
   const cinematicBtn = document.getElementById('cinematicBtn');
   const toolbar = document.getElementById('toolbar');
   const dock = document.getElementById('dock');
+  const styleSelect = document.getElementById('styleSelect');
   let statusFlash = { text: '', until: 0 };
   function flashStatus(text, ms = 1800) {
     statusFlash = { text, until: performance.now() + ms };
@@ -45,6 +46,65 @@ import { Level } from './level.js';
   let fightPick = null;
   let lastPointer = null;
   const bg = '#f7f6f2';
+
+  const STYLES = {
+    brawler: 'Brawler',
+    wingchun: 'Wing Chun',
+    muaythai: 'Muay Thai'
+  };
+  let lastStyle = 'brawler';
+  try {
+    const savedStyle = localStorage.getItem('stickman.style');
+    if (savedStyle && STYLES[savedStyle]) lastStyle = savedStyle;
+  } catch (err) {}
+
+  const STRIKES = {
+    chainpunch: {
+      total: 0.62, lungeEnd: 0.16, lungeSpeed: 110, range: 92,
+      hits: [
+        { at: 0.10, kbx: 45, kdChance: 0, freeze: 0.03, shake: 3, starScale: 0.7 },
+        { at: 0.24, kbx: 55, kdChance: 0, freeze: 0.03, shake: 3, starScale: 0.72 },
+        { at: 0.38, kbx: 120, kdChance: 0.12, freeze: 0.05, shake: 6, starScale: 1.05 }
+      ],
+      cd: 0.35, cdJitter: 0.15
+    },
+    lowkick: {
+      total: 0.42, lungeEnd: 0.12, lungeSpeed: 70, range: 100,
+      hits: [{ at: 0.18, kbx: 140, kdChance: 0.12, freeze: 0.05, shake: 6, starScale: 1.05 }],
+      cd: 0.40, cdJitter: 0.15
+    },
+    teep: {
+      total: 0.55, lungeEnd: 0.16, lungeSpeed: 80, range: 140,
+      hits: [{ at: 0.22, kbx: 320, kdChance: 0.10, freeze: 0.06, shake: 8, starScale: 1.15 }],
+      cd: 0.55, cdJitter: 0.15
+    },
+    roundhouse: {
+      total: 0.62, lungeEnd: 0.20, lungeSpeed: 95, range: 120,
+      hits: [{ at: 0.28, kbx: 240, kdChance: 0.35, freeze: 0.07, shake: 9, starScale: 1.25 }],
+      cd: 0.60, cdJitter: 0.15
+    },
+    knee: {
+      total: 0.40, lungeEnd: 0.12, lungeSpeed: 60, range: 72,
+      hits: [{ at: 0.14, kbx: 160, kdChance: 0.12, freeze: 0.06, shake: 7, starScale: 1.0 }],
+      cd: 0.40, cdJitter: 0.15
+    },
+    elbow: {
+      total: 0.36, lungeEnd: 0.10, lungeSpeed: 55, range: 78,
+      hits: [{ at: 0.13, kbx: 180, kdChance: 0.18, freeze: 0.06, shake: 7, starScale: 1.0 }],
+      cd: 0.40, cdJitter: 0.15
+    }
+  };
+
+  function startStrike(f, move) {
+    const m = STRIKES[move];
+    if (!m) return;
+    f.combat.state = 'strike';
+    f.combat.move = move;
+    f.combat.t = m.total;
+    f.combat.hitIndex = 0;
+    f.combat.hitDone = false;
+    f.combat.spin = 0;
+  }
 
   const SCENES = {
     paper: { label: 'Paper', src: null, veil: 0 },
@@ -853,6 +913,7 @@ import { Level } from './level.js';
       this.x = x;
       this.y = y;
       this.color = color;
+      this.style = lastStyle;
       this.behavior = 'idle';
       this.phase = Math.random() * Math.PI * 2;
       this.vy = 0;
@@ -879,7 +940,8 @@ import { Level } from './level.js';
       this.trail = [];
       this.combat = {
         state: 'idle', t: 0, cd: 0.4 + Math.random() * 0.6,
-        hitDone: false, kbx: 0, spin: 0, hits: 0, snap: false, react: null, landed: false
+        hitDone: false, kbx: 0, spin: 0, hits: 0, snap: false, react: null, landed: false,
+        move: null, hitIndex: 0
       };
       this.hasPower = false;
       this.powerCd = 0;
@@ -914,7 +976,8 @@ import { Level } from './level.js';
     resetCombat() {
       this.combat = {
         state: 'ready', t: 0, cd: 0.4 + Math.random() * 0.6,
-        hitDone: false, kbx: 0, spin: 0, hits: 0, snap: false, react: null, landed: false
+        hitDone: false, kbx: 0, spin: 0, hits: 0, snap: false, react: null, landed: false,
+        move: null, hitIndex: 0
       };
     }
 
@@ -937,7 +1000,10 @@ import { Level } from './level.js';
       this.foe = null;
       this.combatFloor = null;
       this.trail.length = 0;
-      this.combat = { state: 'idle', t: 0, cd: 0, hitDone: false, kbx: 0, spin: 0, hits: 0, snap: false, react: null, landed: false };
+      this.combat = {
+        state: 'idle', t: 0, cd: 0, hitDone: false, kbx: 0, spin: 0, hits: 0,
+        snap: false, react: null, landed: false, move: null, hitIndex: 0
+      };
     }
 
     setBehavior(b) {
@@ -1116,7 +1182,7 @@ import { Level } from './level.js';
       }
       if (step <= 0) return;
       const cs = this.fighting ? this.combat.state : '';
-      const attacking = /punch|kick|combo|sweep|uppercut/.test(cs);
+      const attacking = /punch|kick|combo|sweep|uppercut|strike/.test(cs);
       const armScale = attacking ? 0.16 : 1;
       const upperX = clamp(-this.accX * 0.005, -5.5, 5.5);
       const upperY = clamp(-this.accY * 0.0018 - this.velY * 0.003, -4, 4);
@@ -1351,9 +1417,11 @@ import { Level } from './level.js';
     }
 
     poseKey() {
-      const combat = this.fighting ? this.combat.state : '-';
+      const combat = this.fighting
+        ? `${this.combat.state}${this.combat.move ? ':' + this.combat.move : ''}`
+        : '-';
       const blasted = this.blown ? this.blown.phase : '-';
-      return `${this.behavior}|${combat}|${blasted}|${this.dragging ? 'drag' : ''}`;
+      return `${this.style}|${this.behavior}|${combat}|${blasted}|${this.dragging ? 'drag' : ''}`;
     }
 
     _tickBlend(dt) {
@@ -1373,7 +1441,7 @@ import { Level } from './level.js';
         this.blendDur = snap ? 0.045 : 0.14;
         if (!snap) {
           if (/knockdown|getup|launched/.test(key)) this.blendDur = 0.18;
-          else if (/punch|kick|combo|sweep|uppercut/.test(key)) this.blendDur = 0.09;
+          else if (/punch|kick|combo|sweep|uppercut|strike/.test(key)) this.blendDur = 0.09;
         }
         if (!this.prevPose) this.blendT = 1;
       }
@@ -1463,10 +1531,14 @@ import { Level } from './level.js';
       const c = this.combat;
       c.t -= dt;
       this.phase += dt * 8;
-      if (c.state !== this._lastCombatState) {
-        this._lastCombatState = c.state;
-        if (/punch|kick|combo|spinkick|sweep|uppercut|flyingkick/.test(c.state)) {
-          audio.whoosh(panFor(this.x), /spinkick|flyingkick/.test(c.state) ? 1.2 : 0.8);
+      const stateKey = c.state === 'strike' ? `strike:${c.move}` : c.state;
+      if (stateKey !== this._lastCombatState) {
+        this._lastCombatState = stateKey;
+        if (/punch|kick|combo|spinkick|sweep|uppercut|flyingkick|strike/.test(c.state)) {
+          const power = c.state === 'strike'
+            ? (c.move === 'roundhouse' ? 1.1 : c.move === 'teep' ? 1.0 : 0.8)
+            : (/spinkick|flyingkick/.test(c.state) ? 1.2 : 0.8);
+          audio.whoosh(panFor(this.x), power);
         }
       }
 
@@ -1508,12 +1580,14 @@ import { Level } from './level.js';
         c.cd = Math.max(c.cd, 0.2);
         c.hitDone = false;
         c.spin = 0;
+        c.move = null;
+        c.hitIndex = 0;
         this.trail.length = 0;
         return;
       }
 
       const airborne = this.y < groundY - 2;
-      const trailStates = ['flyingkick', 'spinkick', 'punch', 'kick', 'combo', 'uppercut'];
+      const trailStates = ['flyingkick', 'spinkick', 'punch', 'kick', 'combo', 'uppercut', 'strike'];
       if (trailStates.includes(c.state)) {
         this.trail.push({ x: this.x, y: this.y, spin: c.spin, snap: this.pose() });
         if (this.trail.length > 6) this.trail.shift();
@@ -1582,7 +1656,12 @@ import { Level } from './level.js';
       }
 
       if (c.state === 'block') {
-        if (c.t <= 0) { c.state = 'ready'; c.cd = 0.35 + Math.random() * 0.35; }
+        if (c.t <= 0) {
+          c.state = 'ready';
+          c.cd = this.style === 'wingchun'
+            ? 0.16 + Math.random() * 0.18
+            : 0.35 + Math.random() * 0.35;
+        }
         return;
       }
 
@@ -1745,6 +1824,32 @@ import { Level } from './level.js';
         return;
       }
 
+      if (c.state === 'strike') {
+        const m = STRIKES[c.move];
+        if (!m) {
+          c.state = 'ready';
+          c.t = 0;
+          c.cd = 0.4;
+          c.move = null;
+          c.hitIndex = 0;
+          return;
+        }
+        const elapsed = m.total - c.t;
+        if (elapsed < m.lungeEnd) this.x += this.facing * m.lungeSpeed * dt;
+        while (c.hitIndex < m.hits.length && elapsed >= m.hits[c.hitIndex].at) {
+          const h = m.hits[c.hitIndex++];
+          this.landHit(enemy, { ...m, ...h });
+        }
+        if (c.t <= 0) {
+          c.state = 'ready';
+          c.cd = m.cd + Math.random() * m.cdJitter;
+          c.move = null;
+          c.hitIndex = 0;
+        }
+        this.x = clamp(this.x, xMin, xMax);
+        return;
+      }
+
       // ready
       c.cd -= dt;
       if (airborne) return;
@@ -1755,11 +1860,13 @@ import { Level } from './level.js';
         if (dist > 120) c.state = 'approach';
         return;
       }
-      const enemyAttacking = ['punch', 'kick', 'flyingkick', 'spinkick', 'sweep', 'uppercut', 'combo'].includes(eState);
-      if (enemyAttacking && dist < 125 && Math.random() < 0.06) {
-        if (Math.random() < 0.45) {
+      const enemyAttacking = ['punch', 'kick', 'flyingkick', 'spinkick', 'sweep', 'uppercut', 'combo', 'strike'].includes(eState);
+      const defendChance = this.style === 'wingchun' ? 0.085 : 0.06;
+      if (enemyAttacking && dist < 125 && Math.random() < defendChance) {
+        const blockChance = this.style === 'wingchun' ? 0.72 : this.style === 'muaythai' ? 0.52 : 0.45;
+        if (Math.random() < blockChance) {
           c.state = 'block';
-          c.t = 0.45;
+          c.t = this.style === 'wingchun' ? 0.3 : 0.45;
         } else {
           c.state = 'dodge';
           c.t = 0.3;
@@ -1777,25 +1884,57 @@ import { Level } from './level.js';
         return;
       }
       if (c.cd <= 0) {
-        const r = Math.random();
-        if (dist > 200) {
-          if (r < 0.7) c.state = 'approach';
-          else { c.state = 'flyingkick'; c.t = 0.85; c.hitDone = false; c.kickDone = false; }
-        } else if (dist > 100) {
-          if (r < 0.3) c.state = 'approach';
-          else if (r < 0.55) { c.state = 'flyingkick'; c.t = 0.85; c.hitDone = false; c.kickDone = false; }
-          else if (r < 0.7) { c.state = 'spinkick'; c.t = 0.55; c.hitDone = false; c.spin = 0; }
-          else if (r < 0.85) { c.state = 'punch'; c.t = 0.35; c.hitDone = false; }
-          else { c.state = 'kick'; c.t = 0.45; c.hitDone = false; }
+        if (this.style === 'wingchun') {
+          if (dist > 96) {
+            c.state = 'approach';
+          } else {
+            const r = Math.random();
+            if (r < 0.58) startStrike(this, 'chainpunch');
+            else if (r < 0.78) startStrike(this, 'lowkick');
+            else if (r < 0.92) { c.state = 'block'; c.t = 0.32; }
+            else { c.state = 'dodge'; c.t = 0.3; }
+          }
+        } else if (this.style === 'muaythai') {
+          if (dist > 150) {
+            c.state = 'approach';
+          } else if (dist > 100) {
+            const r = Math.random();
+            if (dist > 135) {
+              if (r < 0.75) startStrike(this, 'teep');
+              else c.state = 'approach';
+            } else if (r < 0.45) startStrike(this, 'teep');
+            else if (r < 0.8) startStrike(this, 'roundhouse');
+            else c.state = 'approach';
+          } else {
+            const r = Math.random();
+            if (r < 0.3) startStrike(this, 'knee');
+            else if (r < 0.6) startStrike(this, 'elbow');
+            else if (r < 0.8) startStrike(this, 'roundhouse');
+            else if (r < 0.9) startStrike(this, 'teep');
+            else if (r < 0.96) { c.state = 'block'; c.t = 0.4; }
+            else { c.state = 'dodge'; c.t = 0.3; }
+          }
         } else {
-          if (r < 0.16) { c.state = 'punch'; c.t = 0.35; c.hitDone = false; }
-          else if (r < 0.28) { c.state = 'kick'; c.t = 0.45; c.hitDone = false; }
-          else if (r < 0.4) { c.state = 'combo'; c.t = 0.95; c.hits = 0; }
-          else if (r < 0.52) { c.state = 'spinkick'; c.t = 0.55; c.hitDone = false; c.spin = 0; }
-          else if (r < 0.63) { c.state = 'sweep'; c.t = 0.5; c.hitDone = false; }
-          else if (r < 0.73) { c.state = 'uppercut'; c.t = 0.48; c.hitDone = false; }
-          else if (r < 0.85) { c.state = 'block'; c.t = 0.4; }
-          else { c.state = 'dodge'; c.t = 0.3; }
+          const r = Math.random();
+          if (dist > 200) {
+            if (r < 0.7) c.state = 'approach';
+            else { c.state = 'flyingkick'; c.t = 0.85; c.hitDone = false; c.kickDone = false; }
+          } else if (dist > 100) {
+            if (r < 0.3) c.state = 'approach';
+            else if (r < 0.55) { c.state = 'flyingkick'; c.t = 0.85; c.hitDone = false; c.kickDone = false; }
+            else if (r < 0.7) { c.state = 'spinkick'; c.t = 0.55; c.hitDone = false; c.spin = 0; }
+            else if (r < 0.85) { c.state = 'punch'; c.t = 0.35; c.hitDone = false; }
+            else { c.state = 'kick'; c.t = 0.45; c.hitDone = false; }
+          } else {
+            if (r < 0.16) { c.state = 'punch'; c.t = 0.35; c.hitDone = false; }
+            else if (r < 0.28) { c.state = 'kick'; c.t = 0.45; c.hitDone = false; }
+            else if (r < 0.4) { c.state = 'combo'; c.t = 0.95; c.hits = 0; }
+            else if (r < 0.52) { c.state = 'spinkick'; c.t = 0.55; c.hitDone = false; c.spin = 0; }
+            else if (r < 0.63) { c.state = 'sweep'; c.t = 0.5; c.hitDone = false; }
+            else if (r < 0.73) { c.state = 'uppercut'; c.t = 0.48; c.hitDone = false; }
+            else if (r < 0.85) { c.state = 'block'; c.t = 0.4; }
+            else { c.state = 'dodge'; c.t = 0.3; }
+          }
         }
       }
     }
@@ -1862,6 +2001,15 @@ import { Level } from './level.js';
         else if (cs === 'sweep') lean = 0.5 * f;
         else if (cs === 'uppercut') lean = 0.08 * f;
         else if (cs === 'combo') lean = 0.18 * f;
+        else if (cs === 'strike') {
+          const move = this.combat.move;
+          if (move === 'teep') lean = -0.18 * f;
+          else if (move === 'roundhouse') lean = -0.06 * f;
+          else if (move === 'lowkick') lean = 0.08 * f;
+          else if (move === 'chainpunch' || move === 'elbow') lean = 0.2 * f;
+          else if (move === 'knee') lean = 0.12 * f;
+          else lean = 0.1 * f;
+        }
         else if (cs === 'launched') lean = -0.35 * f;
         else if (cs === 'getup') lean = 0.1 * f;
         else lean = 0.1 * f;
@@ -1877,9 +2025,11 @@ import { Level } from './level.js';
       const fightingPose = this.fighting && !this.dragging;
       const combatState = fightingPose ? this.combat.state : '';
       let spineBend = clamp(-lean * 0.16, -0.09, 0.09);
-      if (combatState === 'punch' || combatState === 'combo') spineBend += 0.04 * f;
+      if (combatState === 'punch' || combatState === 'combo' ||
+          (combatState === 'strike' && /chainpunch|elbow/.test(this.combat.move))) spineBend += 0.04 * f;
       else if (combatState === 'block') spineBend += 0.03 * f;
-      else if (combatState === 'kick' || combatState === 'sweep' || combatState === 'flyingkick') spineBend -= 0.04 * f;
+      else if (combatState === 'kick' || combatState === 'sweep' || combatState === 'flyingkick' ||
+          (combatState === 'strike' && /lowkick|teep|roundhouse/.test(this.combat.move))) spineBend -= 0.04 * f;
       if (this.landT > 0 && !crawling) {
         spineBend += f * 0.05 * clamp(this.landT / 0.4, 0, 1);
       }
@@ -1963,6 +2113,17 @@ import { Level } from './level.js';
         lKnee = -0.8; rKnee = -0.12;
         la = -0.1; la2 = 2.3;
         ra = 0.6; ra2 = 1.5;
+        if (this.style === 'wingchun') {
+          lHip = 0.36 + bob; rHip = -0.28;
+          lKnee = -0.52; rKnee = -0.2;
+          la = 0.34; la2 = 1.85;
+          ra = 0.42; ra2 = 1.75;
+        } else if (this.style === 'muaythai') {
+          lHip = 0.52 + bob; rHip = -0.38;
+          lKnee = -0.62; rKnee = -0.22;
+          la = 0.58; la2 = 2.05;
+          ra = 0.5; ra2 = 1.95;
+        }
 
         if (cs === 'punch') {
           const e = 0.35 - this.combat.t;
@@ -2036,10 +2197,76 @@ import { Level } from './level.js';
             lKnee = lerp(-0.9, -0.1, prog); rKnee = lerp(-0.7, -0.1, prog);
           }
         } else if (cs === 'block') {
-          lHip = 0.4; lKnee = -0.9;
-          rHip = -0.35; rKnee = -0.3;
-          la = 0.9; la2 = 2.35;
-          ra = 0.8; ra2 = 2.45;
+          if (this.style === 'wingchun') {
+            lHip = 0.32; lKnee = -0.62;
+            rHip = -0.3; rKnee = -0.25;
+            la = 0.75; la2 = 2.5;
+            ra = 0.55; ra2 = 2.55;
+          } else if (this.style === 'muaythai') {
+            lHip = 0.42; lKnee = -0.7;
+            rHip = -0.36; rKnee = -0.3;
+            la = 0.85; la2 = 2.4;
+            ra = 0.78; ra2 = 2.5;
+          } else {
+            lHip = 0.4; lKnee = -0.9;
+            rHip = -0.35; rKnee = -0.3;
+            la = 0.9; la2 = 2.35;
+            ra = 0.8; ra2 = 2.45;
+          }
+        } else if (cs === 'strike') {
+          const move = this.combat.move;
+          const m = STRIKES[move];
+          if (m) {
+            const e = m.total - this.combat.t;
+            if (move === 'chainpunch') {
+              const step = Math.min(2, Math.floor(e / 0.14));
+              const local = clamp((e - step * 0.14) / 0.14, 0, 1);
+              const punch = Math.sin(Math.PI * local);
+              if (step === 0 || step === 2) {
+                ra = lerp(0.42, 1.35, punch); ra2 = lerp(1.75, 0.02, punch);
+                la = 0.34; la2 = 1.85;
+              } else {
+                la = lerp(0.34, 1.3, punch); la2 = lerp(1.85, 0.02, punch);
+                ra = 0.42; ra2 = 1.75;
+              }
+              lHip = 0.36 + punch * 0.1; rHip = -0.28;
+              lKnee = -0.52; rKnee = -0.2;
+            } else if (move === 'lowkick') {
+              const kick = smoothstep(0.08, 0.18, e) * (1 - smoothstep(0.26, 0.4, e));
+              lHip = lerp(0.36, 1.05, kick);
+              lKnee = lerp(-0.6, -0.05, kick);
+              rHip = -0.3; rKnee = -0.3;
+              la = lerp(0.34, -0.5, kick); la2 = lerp(1.85, 0.6, kick);
+              ra = lerp(0.42, 0.9, kick); ra2 = lerp(1.75, 1.1, kick);
+            } else if (move === 'teep') {
+              const kick = smoothstep(0.1, 0.22, e) * (1 - smoothstep(0.3, 0.52, e));
+              lHip = lerp(0.36, 1.45, kick);
+              lKnee = lerp(-0.6, -0.02, kick);
+              rHip = -0.3; rKnee = -0.25;
+              la = lerp(0.34, -0.7, kick); la2 = lerp(1.85, 0.4, kick);
+              ra = lerp(0.42, -0.5, kick); ra2 = lerp(1.75, 0.5, kick);
+            } else if (move === 'roundhouse') {
+              const kick = smoothstep(0.12, 0.28, e) * (1 - smoothstep(0.36, 0.58, e));
+              lHip = lerp(0.36, 1.55, kick);
+              lKnee = lerp(-0.6, -0.02, kick);
+              rHip = -0.3; rKnee = -0.35;
+              la = lerp(0.34, -0.9, kick); la2 = lerp(1.85, 0.35, kick);
+              ra = lerp(0.42, 0.95, kick); ra2 = lerp(1.75, 1.15, kick);
+            } else if (move === 'knee') {
+              const knee = smoothstep(0.04, 0.14, e) * (1 - smoothstep(0.2, 0.36, e));
+              lHip = lerp(0.36, 1.35, knee);
+              lKnee = lerp(-0.6, 1.05, knee);
+              rHip = -0.3; rKnee = -0.2;
+              la = lerp(0.34, 1.1, knee); la2 = lerp(1.85, 0.5, knee);
+              ra = lerp(0.42, 1.2, knee); ra2 = lerp(1.75, 0.4, knee);
+            } else if (move === 'elbow') {
+              const elbow = smoothstep(0.04, 0.13, e) * (1 - smoothstep(0.18, 0.32, e));
+              ra = lerp(0.42, 1.5, elbow); ra2 = lerp(1.75, 0.7, elbow);
+              la = lerp(0.34, 0.9, elbow); la2 = lerp(1.85, 1.6, elbow);
+              lHip = 0.36; rHip = -0.28;
+              lKnee = -0.52; rKnee = -0.2;
+            }
+          }
         } else if (cs === 'stagger') {
           const dur = this.combat.reactDur || 0.35;
           const rt = clamp(1 - this.combat.t / dur, 0, 1);
@@ -2077,7 +2304,7 @@ import { Level } from './level.js';
             lHip = 0.3; rHip = 0.18;
             lKnee = -0.3; rKnee = -0.22;
           }
-        } else {
+        } else if (this.style === 'brawler') {
           la = -0.1 + bob; la2 = 2.3;
           ra = 0.6 - bob; ra2 = 1.5;
         }
@@ -2238,6 +2465,7 @@ import { Level } from './level.js';
         if (cs === 'kick' || (cs === 'combo' && (this.combat.comboStep || 0) === 2)) footStyleL = 'point';
         if (cs === 'flyingkick' || cs === 'spinkick' || cs === 'sweep') footStyleL = footStyleR = 'point';
         if (cs === 'launched' || cs === 'knockdown') footStyleL = footStyleR = 'point';
+        if (cs === 'strike' && /lowkick|teep|roundhouse/.test(this.combat.move)) footStyleL = 'point';
       } else if (b === 'run') {
         if (lKnee < -0.9) footStyleL = 'point';
         if (rKnee < -0.9) footStyleR = 'point';
@@ -2442,7 +2670,7 @@ import { Level } from './level.js';
       const f = this.facing;
       const cs = this.fighting ? this.combat.state : '';
       const attacking = cs === 'punch' || cs === 'kick' || cs === 'combo' || cs === 'sweep' ||
-        cs === 'uppercut' || cs === 'flyingkick' || cs === 'spinkick';
+        cs === 'uppercut' || cs === 'flyingkick' || cs === 'spinkick' || cs === 'strike';
       const running = !this.fighting && this.behavior === 'run' && !this.dragging;
       if (!running && !attacking) return;
 
@@ -2501,7 +2729,7 @@ import { Level } from './level.js';
         punch: 0.35, kick: 0.45, combo: 0.95,
         sweep: 0.5, uppercut: 0.48, flyingkick: 0.85, spinkick: 0.55
       };
-      const total = totals[cs];
+      const total = cs === 'strike' ? (STRIKES[this.combat.move]?.total || 0) : totals[cs];
       if (!total) return;
       const elapsed = total - this.combat.t;
       let start, end, limb, tip;
@@ -2520,6 +2748,17 @@ import { Level } from './level.js';
         start = 0.12; end = 0.28; limb = pose.legL; tip = pose.toeL;
       } else if (cs === 'flyingkick') {
         start = 0.16; end = 0.5; limb = pose.legL; tip = pose.toeL;
+      } else if (cs === 'strike') {
+        const m = STRIKES[this.combat.move];
+        if (!m || !m.hits.length) return;
+        const hit = m.hits[0];
+        start = hit.at - 0.06;
+        end = hit.at + 0.1;
+        if (this.combat.move === 'chainpunch' || this.combat.move === 'elbow') {
+          limb = pose.armR; tip = pose.handR;
+        } else {
+          limb = pose.legL; tip = pose.toeL;
+        }
       } else {
         start = 0.12; end = 0.4; limb = pose.legL; tip = pose.toeL;
       }
@@ -2911,6 +3150,8 @@ import { Level } from './level.js';
     if (!selected && sel.length) selected = sel[sel.length - 1];
     const has = !!selected;
     const multi = sel.length > 1;
+    const styles = new Set(sel.map(f => f.style));
+    const styleMixed = styles.size > 1;
     const compact = window.innerWidth <= 520;
     const narrow = window.innerWidth <= 360;
     if (fightPick && (
@@ -2978,6 +3219,17 @@ import { Level } from './level.js';
     colorPicker.disabled = !has;
     if (has) colorPicker.value = rgbToHex(selected.color);
 
+    if (styleSelect) {
+      styleSelect.value = has ? (styleMixed ? 'mixed' : sel[0].style) : lastStyle;
+      const locked = has && sel.some(f => f.fighting);
+      styleSelect.disabled = !has || locked;
+      styleSelect.title = !has
+        ? 'Fighting style'
+        : locked
+          ? 'Style is locked during a duel'
+          : 'Fighting style';
+    }
+
     if (flashing) {
       statusEl.textContent = statusFlash.text;
       statusEl.title = statusFlash.text;
@@ -3032,6 +3284,22 @@ import { Level } from './level.js';
   colorPicker.addEventListener('input', () => {
     for (const f of selectionList()) f.color = colorPicker.value;
   });
+
+  if (styleSelect) {
+    styleSelect.addEventListener('change', () => {
+      const style = styleSelect.value;
+      if (!STYLES[style]) {
+        updateUI();
+        return;
+      }
+      lastStyle = style;
+      try { localStorage.setItem('stickman.style', style); } catch (err) {}
+      for (const f of selectionList()) {
+        if (!f.fighting) f.style = style;
+      }
+      updateUI();
+    });
+  }
 
   if (sceneSelect) {
     sceneSelect.value = sceneId;
