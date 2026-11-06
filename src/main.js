@@ -211,14 +211,87 @@ import { Level } from './level.js';
     c.restore();
   }
 
-  function utcStamp() {
+  function clockStamp() {
     return Math.floor(Date.now() / 60000);
   }
 
   function celestialTheta() {
     const now = new Date();
-    const h = now.getUTCHours() + now.getUTCMinutes() / 60;
+    const h = now.getHours() + now.getMinutes() / 60;
     return (h / 24) * Math.PI * 2 - Math.PI / 2;
+  }
+
+  const SKY_KEYS = [
+    { h: 0, top: [203, 214, 228], bottom: [238, 233, 223], alpha: 0.25 },
+    { h: 5, top: [210, 213, 222], bottom: [246, 224, 203], alpha: 0.24 },
+    { h: 7, top: [231, 226, 217], bottom: [248, 218, 192], alpha: 0.20 },
+    { h: 12, top: [228, 237, 240], bottom: [251, 247, 237], alpha: 0.14 },
+    { h: 17, top: [239, 228, 211], bottom: [248, 220, 193], alpha: 0.20 },
+    { h: 19, top: [214, 213, 226], bottom: [240, 206, 185], alpha: 0.24 },
+    { h: 24, top: [203, 214, 228], bottom: [238, 233, 223], alpha: 0.25 }
+  ];
+
+  function mixSkyColor(a, b, t) {
+    return [
+      a[0] + (b[0] - a[0]) * t,
+      a[1] + (b[1] - a[1]) * t,
+      a[2] + (b[2] - a[2]) * t
+    ];
+  }
+
+  function skyRgba(c, a) {
+    return `rgba(${Math.round(c[0])}, ${Math.round(c[1])}, ${Math.round(c[2])}, ${a})`;
+  }
+
+  function skyPalette() {
+    const now = new Date();
+    const h = now.getHours() + now.getMinutes() / 60;
+    let a = SKY_KEYS[0];
+    let b = SKY_KEYS[SKY_KEYS.length - 1];
+    for (let i = 0; i < SKY_KEYS.length - 1; i++) {
+      if (h >= SKY_KEYS[i].h && h <= SKY_KEYS[i + 1].h) {
+        a = SKY_KEYS[i];
+        b = SKY_KEYS[i + 1];
+        break;
+      }
+    }
+    const t = (h - a.h) / Math.max(0.0001, b.h - a.h);
+    return {
+      top: mixSkyColor(a.top, b.top, t),
+      bottom: mixSkyColor(a.bottom, b.bottom, t),
+      alpha: a.alpha + (b.alpha - a.alpha) * t
+    };
+  }
+
+  function drawSkyGradient(c, strength) {
+    const pal = skyPalette();
+    const horizon = Math.max(1, level.groundY);
+    const mid = mixSkyColor(pal.top, pal.bottom, 0.55);
+    const grad = c.createLinearGradient(0, 0, 0, horizon);
+    grad.addColorStop(0, skyRgba(pal.top, pal.alpha * strength));
+    grad.addColorStop(0.68, skyRgba(mid, pal.alpha * 0.9 * strength));
+    grad.addColorStop(1, skyRgba(pal.bottom, pal.alpha * 0.65 * strength));
+    c.save();
+    c.fillStyle = grad;
+    c.fillRect(0, 0, W, horizon);
+    c.restore();
+  }
+
+  function drawSkyGlow(c, x, y, radius, color, alpha) {
+    if (alpha <= 0.001) return;
+    c.save();
+    c.beginPath();
+    c.rect(0, 0, W, level.groundY);
+    c.clip();
+    const glow = c.createRadialGradient(x, y, 0, x, y, radius);
+    glow.addColorStop(0, skyRgba(color, alpha));
+    glow.addColorStop(0.55, skyRgba(color, alpha * 0.35));
+    glow.addColorStop(1, skyRgba(color, 0));
+    c.fillStyle = glow;
+    c.beginPath();
+    c.arc(x, y, radius, 0, Math.PI * 2);
+    c.fill();
+    c.restore();
   }
 
   function drawSun(c, x, y, r, alpha) {
@@ -280,12 +353,14 @@ import { Level } from './level.js';
     if (sunA > 0.01) {
       const x = W / 2 - Math.cos(theta) * W * 0.42;
       const y = H * 0.5 - Math.sin(theta) * H * 0.30;
+      drawSkyGlow(c, x, y, Math.max(W, H) * 0.48, [242, 201, 76], 0.11 * alpha);
       drawSun(c, x, y, r, sunA);
     }
     if (moonA > 0.01) {
       const mt = theta + Math.PI;
       const x = W / 2 - Math.cos(mt) * W * 0.42;
       const y = H * 0.5 - Math.sin(mt) * H * 0.30;
+      drawSkyGlow(c, x, y, Math.max(W, H) * 0.48, [210, 225, 245], 0.07 * alpha);
       drawMoon(c, x, y, r, moonA);
     }
   }
@@ -359,6 +434,7 @@ import { Level } from './level.js';
       sceneCtx.filter = 'saturate(0.78) contrast(0.96)';
       sceneCtx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
       sceneCtx.restore();
+      drawSkyGradient(sceneCtx, 0.55);
       drawCelestial(sceneCtx, 0.5);
       sceneCtx.globalAlpha = sc.veil;
       sceneCtx.fillStyle = bg;
@@ -369,6 +445,7 @@ import { Level } from './level.js';
     } else {
       sceneCtx.fillStyle = bg;
       sceneCtx.fillRect(0, 0, W, H);
+      drawSkyGradient(sceneCtx, 1);
       drawCelestial(sceneCtx, 1);
       level.draw(sceneCtx);
       drawGround(sceneCtx, false);
@@ -4129,7 +4206,7 @@ import { Level } from './level.js';
     updateCinematic(rdt);
     camera.update(rdt);
 
-    const stamp = utcStamp();
+    const stamp = clockStamp();
     if (stamp !== celestialStamp) {
       celestialStamp = stamp;
       sceneDirty = true;

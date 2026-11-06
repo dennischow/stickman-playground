@@ -13,7 +13,7 @@ Built with vanilla JavaScript and the Canvas 2D API, bundled with Vite. No game 
 - **Motion polish** — smoothed frame-to-frame velocity drives subtle head, torso, and arm lag; landings squash and settle; footsteps kick up dust; fast strikes leave short smear arcs. All of it respects `prefers-reduced-motion`.
 - **Autonomous mode** — figures randomly switch actions on their own, each with a randomized "think" timer.
 - **Ambient chatter** — idle figures on the same floor occasionally face each other and trade a short speech-bubble exchange, with style-specific lines for Wing Chun, Muay Thai, and Brawler. Only one conversation runs at a time.
-- **Living sky** — the paper sky carries a sun and moon on a UTC 24-hour orbit, plus occasional drifting bird flocks. The celestial bodies fade near the horizon, and the birds thin out at night.
+- **Living sky** — the paper sky carries a sun and moon on a local 24-hour orbit, plus occasional drifting bird flocks. The celestial bodies fade near the horizon, and the birds thin out at night.
 - **Kung-fu combat** — AI duels with approach, block, dodge, punch, kick, combo, spin kick, sweep, uppercut, flying kick, stagger, knockdown, launch, and get-up states. Hits use natural recoil poses and knockdowns fall, settle, and push back up continuously.
 - **Fighting styles** — each figure can switch between Brawler, Wing Chun, and Muay Thai. Wing Chun uses a centerline guard, chain punches, low heel kicks, and a compact parry; Muay Thai uses teep, roundhouse, knee, and elbow. Styles change guard poses, attack timing and range, and AI distance preferences.
 - **Superpower** — grant a figure the power, then blast the nearest figure into the wall with knockback, slow-motion, impact typography, ink splats, and screen shake.
@@ -94,11 +94,11 @@ The `frame()` loop in [`src/main.js`](src/main.js) uses `requestAnimationFrame` 
 2. Advances figure physics, ambient chatter, bird flocks, timed effects, and persistent splats.
 3. Caches one pose per figure for the frame.
 4. Updates the cinematic framing target and damps the camera toward it.
-5. Repaints the cached scene only when it is dirty or the UTC minute changes.
+5. Repaints the cached scene only when it is dirty or the local minute changes.
 6. Applies screen-space shake, then the camera transform, and draws the scene, birds, ground splats, shadows, figures, marquee, and effects in world space.
 7. Restores the camera, draws any screen-space speech bubbles, applies the tinted flash overlay, and syncs the selection chip at ~10 Hz.
 
-The scene is rendered once to an offscreen canvas on resize, scene change, or UTC minute change, so photo backgrounds cost almost nothing per frame.
+The scene is rendered once to an offscreen canvas on resize, scene change, or local minute change, so photo backgrounds cost almost nothing per frame.
 
 ### The stick figure model
 
@@ -138,7 +138,7 @@ Scenes are declared in `SCENES` in [`src/main.js`](src/main.js). Photo images ar
 
 ### Sky and birds
 
-The sky uses UTC rather than local time: the sun and moon ride a 24-hour orbit, with the sun overhead at 12:00 UTC and the moon overhead at 00:00 UTC. Each body fades in and out near the horizon. On photo scenes the sky is drawn before the paper veil at reduced strength so it sits behind the photograph's atmosphere. The cached scene repaints when the UTC minute changes. Bird flocks of two to five drift across the upper sky every 25–45 seconds, less often at night, with simple ink silhouettes and a gentle wing flap. Reduced-motion mode lowers the flock size and calms the flap.
+The sky follows the viewer's local time: the sun and moon ride a 24-hour orbit, with the sun overhead at local noon and the moon overhead at local midnight. A subtle vertical gradient shifts from cool blue-grey at night through warm dawn and dusk tones to pale daylight, and the sky around the sun or moon picks up a faint matching glow. Each body fades in and out near the horizon. On photo scenes the sky is drawn before the paper veil at reduced strength so it sits behind the photograph's atmosphere. The cached scene repaints when the local minute changes. Bird flocks of two to five drift across the upper sky every 25–45 seconds, less often at night, with simple ink silhouettes and a gentle wing flap. Reduced-motion mode lowers the flock size and calms the flap.
 
 ### Level and surfaces
 
