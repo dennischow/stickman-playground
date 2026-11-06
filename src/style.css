@@ -87,6 +87,14 @@
   }
   #revokeBtn:hover:not(:disabled) { background: rgba(27, 26, 23, 0.08); color: var(--ink); }
   #revokeBtn[hidden] { display: none; }
+  #removeBtn {
+    width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--muted); background: transparent; flex-shrink: 0;
+  }
+  #removeBtn svg { width: 13px; height: 13px; display: block; }
+  #removeBtn:hover:not(:disabled) { background: rgba(178, 58, 47, 0.12); color: #a12a22; }
+  #removeBtn[hidden] { display: none; }
   button[data-action="power"] { position: relative; overflow: hidden; }
   button[data-action="power"]::after {
     content: ''; position: absolute; left: 0; bottom: 0; height: 2px;

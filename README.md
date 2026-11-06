@@ -12,18 +12,21 @@ Built with vanilla JavaScript and the Canvas 2D API, bundled with Vite. No game 
 - **Individual movement** — each figure gets its own walk/run speed, jump height, crouch timing, and landing rest, so a crowd never moves in lockstep.
 - **Motion polish** — smoothed frame-to-frame velocity drives subtle head, torso, and arm lag; landings squash and settle; footsteps kick up dust; fast strikes leave short smear arcs. All of it respects `prefers-reduced-motion`.
 - **Autonomous mode** — figures randomly switch actions on their own, each with a randomized "think" timer.
-- **Ambient chatter** — idle figures on the same floor occasionally face each other and trade a short speech-bubble exchange, with style-specific lines for Wing Chun, Muay Thai, and Brawler. Only one conversation runs at a time.
-- **Living sky** — the paper sky carries a sun and moon on a local 24-hour orbit, plus occasional drifting bird flocks. The celestial bodies fade near the horizon, and the birds thin out at night.
+- **Ambient chatter** — idle figures on the same floor occasionally face each other and trade a short speech-bubble exchange, with style-specific lines for Wing Chun, Muay Thai, and Brawler. A figure may also walk over to start the conversation. Only one conversation runs at a time.
+- **Fight spectators** — bystanders on the same floor sometimes wander over to watch a duel, comment on the action, and drift back to their own business when it ends.
+- **Living sky** — the paper sky carries a sun and moon on a local 24-hour orbit, plus occasional drifting bird flocks. Night is a deeper moonlit blue-grey, the celestial bodies fade near the horizon, and the birds thin out at night.
 - **Kung-fu combat** — AI duels with approach, block, dodge, punch, kick, combo, spin kick, sweep, uppercut, flying kick, stagger, knockdown, launch, and get-up states. Hits use natural recoil poses and knockdowns fall, settle, and push back up continuously.
+- **Health and defeat** — fighters carry a small health bar above their heads; blocks and dodges avoid damage, and a fighter at zero HP falls, lies for two seconds, rises like an angel with a halo and wings, fades out, and is removed.
 - **Fighting styles** — each figure can switch between Brawler, Wing Chun, and Muay Thai. Wing Chun uses a centerline guard, chain punches, low heel kicks, and a compact parry; Muay Thai uses teep, roundhouse, knee, and elbow. Styles change guard poses, attack timing and range, and AI distance preferences.
-- **Superpower** — grant a figure the power, then blast the nearest figure into the wall with knockback, slow-motion, impact typography, ink splats, and screen shake.
+- **Superpower** — grant a figure the power, then blast the nearest figure into the wall with knockback, slow-motion, impact typography, ink splats, and screen shake. Blasting a fighter also takes 20 HP off their health bar.
 - **Comic impact feel** — sprite-based dust and ink, persistent ground splats, starbursts, manga sound-effect words (`BAM`, `WHACK`, `K.O.`, `BOOM`), tinted flashes, and hit-stop.
 - **Synthesized audio** — a small WebAudio engine generates whooshes, impacts, footsteps, jumps, landings, blasts, and K.O. sounds. No audio files, with stereo panning by on-screen position and a persisted mute setting.
-- **Cinematic camera** — a damped camera adds gentle idle framing, duel intro push-in, fight follow, K.O. focus, and blast tracking, with letterbox bars and a persisted toggle. Pointer input is inverse-transformed, so selection and dragging stay accurate while the camera moves.
+- **Cinematic camera** — a damped camera adds gentle idle framing, duel intro push-in, fight follow, K.O. focus, death rise, and blast tracking, with letterbox bars and a persisted toggle. Pointer input is inverse-transformed, so selection and dragging stay accurate while the camera moves.
 - **Multi-level stage** — a paper/ink mezzanine and staircase give the playground vertical space: figures climb stairs, jump between floors, fall off edges, and can be dragged onto either level. Duels lock to one floor once they start; challenging someone across floors sends the attacker up or down the stairs — or off the mezzanine edge — first.
 - **Six scenes** — blank paper plus five photo backgrounds (lake, factory, bridge, highway, floating island), desaturated behind a paper veil. The selection persists via `localStorage`.
 - **Selection & dragging** — click, shift/meta/ctrl-click to multi-select, drag to move a group, or marquee box-select.
-- **Keyboard shortcuts** — `1–5` for motion, `F` fight, `P` power, `R` revoke, `A` add, `M` mute, `C` cinematic.
+- **Remove figures** — select one or more figures and use the trash button in the selection chip, or press `Delete` / `Backspace`, to remove them. The playground can be emptied and Add still works.
+- **Keyboard shortcuts** — `1–5` for motion, `F` fight, `P` power, `R` revoke, `A` add, `M` mute, `C` cinematic, `Delete` remove selection.
 - **Responsive, accessible UI** — the top bar and contextual action dock adapt to narrow screens, buttons expose `aria-pressed`, and `prefers-reduced-motion` trims particles, flashes, slow-motion, and camera motion while CSS disables transitions and grain animation.
 
 ## Getting Started
@@ -71,10 +74,11 @@ npm run check     # syntax-check the JavaScript modules
 | `R` | Revoke the superpower |
 | `M` | Mute or unmute sound |
 | `C` | Toggle the cinematic camera and letterbox |
+| `Delete` / `Backspace` | Remove the selected figure(s) |
 
 ### Toolbar
 
-The top bar holds the always-relevant controls: **Add**, **Autonomous**, **Scene**, **Sound**, and **Cinematic**. The selection chip beside the wordmark shows the current selection, its color swatch, the superpower state, and a small × to revoke the power.
+The top bar holds the always-relevant controls: **Add**, **Autonomous**, **Scene**, **Sound**, and **Cinematic**. The selection chip beside the wordmark shows the current selection, its color swatch, the superpower state, a small × to revoke the power, and a trash button to remove the selection.
 
 Selection actions live in a floating dock at the bottom of the screen. It appears whenever a figure is selected and sits inside the cinematic letterbox bar when cinematic mode is on:
 
@@ -91,7 +95,7 @@ The game loop, rendering, physics, AI, and input live in [`src/main.js`](src/mai
 The `frame()` loop in [`src/main.js`](src/main.js) uses `requestAnimationFrame` with a delta capped at 50 ms to avoid huge jumps after tab switches. Each frame it:
 
 1. Scales the timestep for hit-stop or slow-motion.
-2. Advances figure physics, ambient chatter, bird flocks, timed effects, and persistent splats.
+2. Advances figure physics, ambient chatter, bird flocks, timed effects, and persistent splats, then flushes any figures whose death sequence has finished.
 3. Caches one pose per figure for the frame.
 4. Updates the cinematic framing target and damps the camera toward it.
 5. Repaints the cached scene only when it is dirty or the local minute changes.
@@ -106,7 +110,7 @@ The scene is rendered once to an offscreen canvas on resize, scene change, or lo
 
 Idle uses a relaxed contrapposto with asymmetric knees and separated arms. Walk plants the front foot with a heel/toe stroke; run adds a flight phase, pointed feet, and stronger arm drive. Jump poses cover crouch, airborne extension, and a compressed landing. Combat stances use staggered feet, a chin-high guard, chambered knees, hip rotation into punches, and counterbalancing arms. These are visual poses only: hit ranges, timings, knockback, and AI balance are unchanged.
 
-Gravity is a constant `1500 px/s²`. Horizontal movement is driven by per-behavior speeds multiplied by a per-figure randomized `speedMul` (0.9–1.25), with facing flips at the screen margins. Voluntary jumps also vary in height (`jumpMul` 0.92–1.12), crouch duration, and landing rest. Faster runners lean slightly more and draw longer speed lines, so movement differences read clearly.
+Gravity is a constant `1500 px/s²`. Horizontal movement is driven by per-behavior speeds — walk is 70 px/s, run 200 px/s, crawl 45 px/s — multiplied by a per-figure randomized `speedMul` (0.9–1.25), with facing flips at the screen margins. Voluntary jumps also vary in height (`jumpMul` 0.92–1.12), crouch duration, and landing rest. Faster runners lean slightly more and draw longer speed lines, so movement differences read clearly.
 
 Frame-to-frame position changes are smoothed into per-figure velocity and acceleration. Those values drive damped springs for the upper body, head, and arms (scaled down during authored attacks), add landing squash and settle, spawn small footstep dust puffs, and draw brief smear arcs on fast strikes. All of these are visual-only and are disabled or reduced when reduced motion is requested.
 
@@ -120,17 +124,23 @@ ready → approach → punch / kick / combo / spinkick / sweep / uppercut / flyi
       ↳ stagger / knockdown / launched / getup
 ```
 
-`landHit()` checks range, honors block/dodge, rolls for knockdown, applies knockback, and spawns hit effects, hit-stop, sound, and impact typography. Staggered figures recoil with a timed guard and recovery step. Knockdowns use a continuous knee-buckle → hip-drop → torso-rotate fall, land with dust and a thud, lie grounded with the head rotated, then push up through hands and crouch instead of popping upright. Facing is frozen while a figure is down or launched.
+`landHit()` checks range, honors block/dodge, subtracts health, rolls for knockdown, applies knockback, and spawns hit effects, hit-stop, sound, and impact typography. Staggered figures recoil with a timed guard and recovery step. Knockdowns use a continuous knee-buckle → hip-drop → torso-rotate fall, land with dust and a thud, lie grounded with the head rotated, then push up through hands and crouch instead of popping upright. Facing is frozen while a figure is down or launched.
+
+Every fighter starts a duel at 100 HP. A small bar above the head shows the remaining fraction and empties as hits land; blocks and dodges avoid damage entirely. At zero HP the fighter falls, lies for two seconds, then rises with a halo and angel wings, fades out, and is removed from the playground. Dying figures cannot be targeted, dragged, chatted with, or recruited as spectators, and the cinematic camera follows the rise before returning to normal framing.
 
 Brawler keeps the original state set. Wing Chun and Muay Thai route their signature attacks through a shared `strike` state driven by the `STRIKES` table, so each move has its own wind-up, hit windows, range, knockback, and recovery. Wing Chun closes distance and favors chain punches, low kicks, and parries; Muay Thai uses teep and roundhouse at range and knee/elbow up close. Style is per figure, saved as `stickman.style`, and locked while a selected figure is dueling.
 
 ### Ambient chatter
 
-When Autonomous is on, two idle figures on the same floor can strike up a short conversation. They stop, face each other, and take turns saying an opener and a reply in screen-space speech bubbles. Conversations require roughly 80–260 px of separation, avoid stairs, fights, chases, dragging, jumping, and blasts, and only one runs at a time. Dragging, combat, power, motion commands, and turning Autonomous off cancel the chat. Figures with the same fighting style occasionally use style-specific lines. Bubbles are drawn after the camera transform, so they stay upright and readable during cinematic zoom and rotation.
+When Autonomous is on, two idle figures on the same floor can strike up a short conversation. Nearby pairs stop and face each other; if nobody is close enough, a figure may walk over to someone 120–600 px away first. They take turns saying an opener and a reply in screen-space speech bubbles. Conversations avoid stairs, fights, chases, dragging, jumping, blasts, and spectators, and only one runs at a time. Dragging, combat, power, motion commands, and turning Autonomous off cancel the chat. Figures with the same fighting style occasionally use style-specific lines. Bubbles are drawn after the camera transform, so they stay upright and readable during cinematic zoom and rotation.
+
+### Fight spectators
+
+When a duel starts and Autonomous is on, up to two bystanders on the same floor may walk over to watch. They pick a viewing spot outside the pair, on their own side of the action so they do not walk through the fight, and stay out of combat. Spectators face the fighters and occasionally comment in a speech bubble, using generic lines or style-aware lines such as “Keep the centerline!” and “Elbows up!”. Only one spectator comment appears at a time. When the duel ends they linger for a moment, possibly say a final line, and then return to normal wandering. Spectators are cancelled if they are dragged, blasted, challenged, pulled into a chase, or if Autonomous is turned off.
 
 ### Superpower
 
-`blastFigure()` pushes the caster back, resets the target, and puts it into a `blown` sequence: it flies across the screen, hits the wall with a burst and `BAM`/`WHAM` text, falls, lies down, then gets up. Blasts trigger brief slow-motion, a gold flash, an ink splat, and screen shake. During a chase, **Power** targets the chased figure specifically, giving the attacker a cross-floor ranged option.
+`blastFigure()` pushes the caster back, resets the target, and puts it into a `blown` sequence: it flies across the screen, hits the wall with a burst and `BAM`/`WHAM` text, falls, lies down, then gets up. Blasts trigger brief slow-motion, a gold flash, an ink splat, and screen shake. Blasting a fighter also subtracts 20 HP; if that empties the bar, the target dies instead of being blown. During a chase, **Power** targets the chased figure specifically, giving the attacker a cross-floor ranged option.
 
 ### Scenes
 
@@ -138,7 +148,7 @@ Scenes are declared in `SCENES` in [`src/main.js`](src/main.js). Photo images ar
 
 ### Sky and birds
 
-The sky follows the viewer's local time: the sun and moon ride a 24-hour orbit, with the sun overhead at local noon and the moon overhead at local midnight. A subtle vertical gradient shifts from cool blue-grey at night through warm dawn and dusk tones to pale daylight, and the sky around the sun or moon picks up a faint matching glow. Each body fades in and out near the horizon. On photo scenes the sky is drawn before the paper veil at reduced strength so it sits behind the photograph's atmosphere. The cached scene repaints when the local minute changes. Bird flocks of two to five drift across the upper sky every 25–45 seconds, less often at night, with simple ink silhouettes and a gentle wing flap. Reduced-motion mode lowers the flock size and calms the flap.
+The sky follows the viewer's local time: the sun and moon ride a 24-hour orbit, with the sun overhead at local noon and the moon overhead at local midnight. A vertical gradient shifts from a deeper moonlit blue-grey at night through warm dawn and dusk tones to pale daylight, and the sky around the sun or moon picks up a faint matching glow. Each body fades in and out near the horizon. On photo scenes the sky is drawn before the paper veil at reduced strength so it sits behind the photograph's atmosphere. The cached scene repaints when the local minute changes. Bird flocks of two to five drift across the upper sky every 25–45 seconds, less often at night, with simple ink silhouettes and a gentle wing flap. Reduced-motion mode lowers the flock size and calms the flap.
 
 ### Level and surfaces
 
@@ -154,7 +164,7 @@ Figures query the level every frame instead of using a fixed ground line. Walkin
 - **Duel intro** — a short push-in on both fighters.
 - **Fight follow** — keeps both active fighters in frame.
 - **Target picking / chase** — frames the attacker together with every valid target, then follows the chase pair across the stairs.
-- **K.O. focus** — pushes in on a knocked-down figure.
+- **K.O. focus** — pushes in on a knocked-down figure, and holds a longer follow on a dying fighter as the body rises.
 - **Blast focus** — tracks from the caster toward the target.
 
 The camera is applied only to the world layer. Letterbox bars, the top bar, the action dock, and impact flashes stay in screen space. Screen shake remains a screen-space offset applied after the camera. Pan, zoom, and rotation are clamped so the visible viewport never leaves the world canvas. Pointer coordinates are converted with `camera.screenToWorld()` before hit testing, so selection, dragging, and marquee selection work at any zoom, pan, or rotation. Motion is damped and gentle; `prefers-reduced-motion` uses static framing and disables letterbox animation. The toggle is in the top bar or on `C`, and persists as `stickman.cinematic` (on by default).

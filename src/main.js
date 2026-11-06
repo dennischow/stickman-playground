@@ -12,6 +12,7 @@ import { Level } from './level.js';
   const statusEl = document.getElementById('readoutText');
   const powerGlyph = document.getElementById('powerGlyph');
   const revokeBtn = document.getElementById('revokeBtn');
+  const removeBtn = document.getElementById('removeBtn');
   const muteBtn = document.getElementById('muteBtn');
   const autonChk = document.getElementById('autonChk');
   const sceneSelect = document.getElementById('sceneSelect');
@@ -62,35 +63,35 @@ import { Level } from './level.js';
     chainpunch: {
       total: 0.62, lungeEnd: 0.16, lungeSpeed: 110, range: 92,
       hits: [
-        { at: 0.10, kbx: 45, kdChance: 0, freeze: 0.03, shake: 3, starScale: 0.7 },
-        { at: 0.24, kbx: 55, kdChance: 0, freeze: 0.03, shake: 3, starScale: 0.72 },
-        { at: 0.38, kbx: 120, kdChance: 0.12, freeze: 0.05, shake: 6, starScale: 1.05 }
+        { at: 0.10, kbx: 45, damage: 3, kdChance: 0, freeze: 0.03, shake: 3, starScale: 0.7 },
+        { at: 0.24, kbx: 55, damage: 3, kdChance: 0, freeze: 0.03, shake: 3, starScale: 0.72 },
+        { at: 0.38, kbx: 120, damage: 6, kdChance: 0.12, freeze: 0.05, shake: 6, starScale: 1.05 }
       ],
       cd: 0.35, cdJitter: 0.15
     },
     lowkick: {
       total: 0.42, lungeEnd: 0.12, lungeSpeed: 70, range: 100,
-      hits: [{ at: 0.18, kbx: 140, kdChance: 0.12, freeze: 0.05, shake: 6, starScale: 1.05 }],
+      hits: [{ at: 0.18, kbx: 140, damage: 9, kdChance: 0.12, freeze: 0.05, shake: 6, starScale: 1.05 }],
       cd: 0.40, cdJitter: 0.15
     },
     teep: {
       total: 0.55, lungeEnd: 0.16, lungeSpeed: 80, range: 140,
-      hits: [{ at: 0.22, kbx: 320, kdChance: 0.10, freeze: 0.06, shake: 8, starScale: 1.15 }],
+      hits: [{ at: 0.22, kbx: 320, damage: 7, kdChance: 0.10, freeze: 0.06, shake: 8, starScale: 1.15 }],
       cd: 0.55, cdJitter: 0.15
     },
     roundhouse: {
       total: 0.62, lungeEnd: 0.20, lungeSpeed: 95, range: 120,
-      hits: [{ at: 0.28, kbx: 240, kdChance: 0.35, freeze: 0.07, shake: 9, starScale: 1.25 }],
+      hits: [{ at: 0.28, kbx: 240, damage: 13, kdChance: 0.35, freeze: 0.07, shake: 9, starScale: 1.25 }],
       cd: 0.60, cdJitter: 0.15
     },
     knee: {
       total: 0.40, lungeEnd: 0.12, lungeSpeed: 60, range: 72,
-      hits: [{ at: 0.14, kbx: 160, kdChance: 0.12, freeze: 0.06, shake: 7, starScale: 1.0 }],
+      hits: [{ at: 0.14, kbx: 160, damage: 10, kdChance: 0.12, freeze: 0.06, shake: 7, starScale: 1.0 }],
       cd: 0.40, cdJitter: 0.15
     },
     elbow: {
       total: 0.36, lungeEnd: 0.10, lungeSpeed: 55, range: 78,
-      hits: [{ at: 0.13, kbx: 180, kdChance: 0.18, freeze: 0.06, shake: 7, starScale: 1.0 }],
+      hits: [{ at: 0.13, kbx: 180, damage: 12, kdChance: 0.18, freeze: 0.06, shake: 7, starScale: 1.0 }],
       cd: 0.40, cdJitter: 0.15
     }
   };
@@ -106,9 +107,15 @@ import { Level } from './level.js';
     f.combat.spin = 0;
   }
 
+  const MAX_HP = 100;
+  const DEATH_FALL = 0.45;
+  const DEATH_DOWN = 2.0;
+  const DEATH_ASCEND = 1.4;
+  const CINE_DEATH = DEATH_FALL + DEATH_DOWN + DEATH_ASCEND;
   const CHAT_OPEN = 2.4;
   const CHAT_REPLY = 2.4;
   const CHAT_GAP = 0.25;
+  const CHAT_APPROACH = 8;
   const CHAT_SCRIPT = [
     ['Nice day for standing around.', 'Beats falling down stairs.'],
     ["You ever wonder why we're all sticks?", 'Nope. Just happy to be drawn.'],
@@ -147,8 +154,29 @@ import { Level } from './level.js';
       ['Keep it simple.', 'Simple is hard.']
     ]
   };
+  const SPECTATOR_CHAT = [
+    "Ooh, that's gonna hurt.",
+    'Nice kick.',
+    'Keep your guard up!',
+    "He's wide open.",
+    "I'm not getting in there.",
+    "Somebody's going down.",
+    'Did you see that?',
+    'My money is on the one in blue.',
+    "That's a lot of spinning.",
+    'I could do that. Probably.',
+    'This is the best part.',
+    'Get him!'
+  ];
+  const SPECTATOR_STYLE_CHAT = {
+    wingchun: 'Keep the centerline!',
+    muaythai: 'Elbows up!',
+    brawler: 'Swing harder!'
+  };
   let chat = null;
   let chatCd = 8 + Math.random() * 7;
+  let spectatorCommentCd = 0;
+  const pendingRemovals = [];
 
   const SCENES = {
     paper: { label: 'Paper', src: null, veil: 0 },
@@ -221,14 +249,18 @@ import { Level } from './level.js';
     return (h / 24) * Math.PI * 2 - Math.PI / 2;
   }
 
+  function isNight() {
+    return Math.sin(celestialTheta()) < -0.05;
+  }
+
   const SKY_KEYS = [
-    { h: 0, top: [203, 214, 228], bottom: [238, 233, 223], alpha: 0.25 },
-    { h: 5, top: [210, 213, 222], bottom: [246, 224, 203], alpha: 0.24 },
+    { h: 0, top: [76, 94, 128], bottom: [148, 154, 166], alpha: 0.78 },
+    { h: 5, top: [124, 136, 162], bottom: [220, 206, 194], alpha: 0.54 },
     { h: 7, top: [231, 226, 217], bottom: [248, 218, 192], alpha: 0.20 },
     { h: 12, top: [228, 237, 240], bottom: [251, 247, 237], alpha: 0.14 },
-    { h: 17, top: [239, 228, 211], bottom: [248, 220, 193], alpha: 0.20 },
-    { h: 19, top: [214, 213, 226], bottom: [240, 206, 185], alpha: 0.24 },
-    { h: 24, top: [203, 214, 228], bottom: [238, 233, 223], alpha: 0.25 }
+    { h: 17, top: [239, 228, 211], bottom: [248, 220, 193], alpha: 0.22 },
+    { h: 19, top: [120, 130, 158], bottom: [222, 188, 174], alpha: 0.54 },
+    { h: 24, top: [76, 94, 128], bottom: [148, 154, 166], alpha: 0.78 }
   ];
 
   function mixSkyColor(a, b, t) {
@@ -389,8 +421,7 @@ import { Level } from './level.js';
     birdTimer -= dt;
     if (birdTimer <= 0) {
       spawnBirdFlock();
-      const night = Math.sin(celestialTheta()) < -0.05;
-      birdTimer = night ? 40 + Math.random() * 30 : 25 + Math.random() * 20;
+      birdTimer = isNight() ? 40 + Math.random() * 30 : 25 + Math.random() * 20;
     }
     for (let i = birds.length - 1; i >= 0; i--) {
       const b = birds[i];
@@ -403,7 +434,7 @@ import { Level } from './level.js';
 
   function drawBirds(c) {
     c.save();
-    c.strokeStyle = 'rgba(27, 26, 23, 0.55)';
+    c.strokeStyle = isNight() ? 'rgba(247, 246, 242, 0.66)' : 'rgba(27, 26, 23, 0.55)';
     c.lineWidth = 1.4;
     c.lineCap = 'round';
     for (const b of birds) {
@@ -620,11 +651,12 @@ import { Level } from './level.js';
 
     if (cine.koT > 0 && cine.koFig) {
       const f = cine.koFig;
-      const p = clamp(1 - cine.koT / CINE_KO, 0, 1);
+      const dur = cine.koDur || CINE_KO;
+      const p = clamp(1 - cine.koT / dur, 0, 1);
       const zoom = 1.18 + 0.05 * Math.sin(Math.PI * p);
       const rotation = clamp(((f.x - W / 2) / Math.max(1, W)) * 0.06, -0.02, 0.02);
       camera.follow = 8;
-      camera.setTarget(f.x, H * 0.56, zoom, rotation);
+      camera.setTarget(f.x, H * 0.56 - (f.dying ? f.dying.rise * 0.45 : 0), zoom, rotation);
       return;
     }
 
@@ -1104,6 +1136,8 @@ import { Level } from './level.js';
     cancelChatFor(b);
     cancelPursuitsFor(a);
     cancelPursuitsFor(b);
+    cancelSpectating(a);
+    cancelSpectating(b);
     cancelFightPick();
     const floor = level.floorAt(a.x, a.y);
     a.combatFloor = floor;
@@ -1116,12 +1150,22 @@ import { Level } from './level.js';
     a.startFight(b);
     b.startFight(a);
     a.trail.length = 0; b.trail.length = 0;
+    assignSpectators(a, b);
     cineStartDuel(a, b);
     audio.duel(panFor((a.x + b.x) / 2));
   }
 
+  function releaseSpectators(a, b) {
+    for (const f of figures) {
+      if (f.spectating && f.spectating.a === a && f.spectating.b === b) {
+        f.spectating.leaving = 1.4;
+      }
+    }
+  }
+
   function endDuel(f) {
     const other = f.foe;
+    releaseSpectators(f, other);
     f.foe = null;
     f.stopFight();
     if (other && other.foe === f) {
@@ -1135,11 +1179,177 @@ import { Level } from './level.js';
     }
   }
 
+  function beginDeath(f, killer) {
+    if (!f || f.dying) return;
+    cancelChatFor(f);
+    cancelSpectating(f);
+    cancelPursuitsFor(f);
+    if (f.foe) endDuel(f);
+    f.fighting = false;
+    f.foe = null;
+    f.combatFloor = null;
+    f.trail.length = 0;
+    f.blown = null;
+    f.chatting = false;
+    f.chatPartner = null;
+    f.bubble = null;
+    f.hp = 0;
+    f.behavior = 'idle';
+    f.vy = 0;
+    f.think = 999;
+    f.dying = {
+      phase: 'fall', t: 0, rise: 0, alpha: 1,
+      dir: killer && killer.x < f.x ? 1 : -1
+    };
+    deselectFigure(f);
+    cineDeath(f);
+  }
+
+  function flushDeaths() {
+    if (!pendingRemovals.length) return;
+    for (const f of pendingRemovals.splice(0)) {
+      if (figures.includes(f)) removeFigure(f, true);
+    }
+  }
+
+  function cancelSpectating(f) {
+    if (!f || !f.spectating) return;
+    f.spectating = null;
+    f.bubble = null;
+    f.think = 1 + Math.random() * 2;
+  }
+
+  function assignSpectators(a, b) {
+    if (!autonChk.checked) return;
+    const floor = level.floorAt(a.x, a.y);
+    if (floor < 0 || level.floorAt(b.x, b.y) !== floor) return;
+    const mid = (a.x + b.x) / 2;
+    const bounds = level.floorBounds(floor);
+    const minX = Math.min(a.x, b.x);
+    const maxX = Math.max(a.x, b.x);
+    const leftRoom = minX - bounds.x0;
+    const rightRoom = bounds.x1 - maxX;
+    const roomier = leftRoom >= rightRoom ? -1 : 1;
+    const floorY = floor === 1 ? level.mezzY : level.groundY;
+    const baseFor = side => side < 0 ? minX - 95 : maxX + 95;
+    const clampSpot = x => clamp(x, bounds.x0 + 24, bounds.x1 - 24);
+    const validSpot = (x, side) => {
+      if (x < bounds.x0 + 16 || x > bounds.x1 - 16) return false;
+      if (level.isOnStairs(x)) return false;
+      if (floor === 0 && x >= level.stairX0 - 8 && x <= level.stairX1 + 8) return false;
+      if (side < 0 && x > minX - 30) return false;
+      if (side > 0 && x < maxX + 30) return false;
+      return level.floorAt(x, floorY) === floor;
+    };
+    const chooseSpot = f => {
+      let side = f.x <= minX - 8 ? -1 : f.x >= maxX + 8 ? 1 : roomier;
+      let spot = clampSpot(baseFor(side));
+      if (!validSpot(spot, side)) {
+        side = -side;
+        spot = clampSpot(baseFor(side));
+        if (!validSpot(spot, side)) return null;
+      }
+      return { side, spot };
+    };
+    let watching = figures.filter(f => f.spectating).length;
+    let count = 0;
+    const used = figures.filter(f => f.spectating).map(f => f.spectating.x);
+    const candidates = figures.filter(f => {
+      if (f === a || f === b) return false;
+      if (f.dying || f.fighting || f.pursuit || f.pursuedBy || f.blown || f.dragging || f.chatting || f.spectating) return false;
+      if (f.behavior === 'jump' || f.vy !== 0) return false;
+      if (level.floorAt(f.x, f.y) !== floor || level.isOnStairs(f.x)) return false;
+      const dist = Math.abs(f.x - mid);
+      if (dist < 120 || dist > 450) return false;
+      if (floor === 0) {
+        if (mid < level.stairX0 && f.x >= level.stairX0) return false;
+        if (mid > level.stairX1 && f.x <= level.stairX1) return false;
+      }
+      return true;
+    });
+    for (const f of candidates) {
+      if (watching >= 3 || count >= 2) break;
+      if (Math.random() > 0.6) continue;
+      const choice = chooseSpot(f);
+      if (!choice) continue;
+      let { side, spot } = choice;
+      let tries = 0;
+      while (used.some(x => Math.abs(x - spot) < 24) && tries < 8) {
+        spot = clampSpot(spot + side * 30);
+        tries++;
+      }
+      if (used.some(x => Math.abs(x - spot) < 20) || !validSpot(spot, side)) continue;
+      f.spectating = { a, b, x: spot, commentT: 1.5 + Math.random() * 1.5, leaving: 0 };
+      f.setBehavior('idle');
+      f.think = 999;
+      f.vy = 0;
+      f.facing = mid > f.x ? 1 : -1;
+      used.push(spot);
+      watching++;
+      count++;
+    }
+  }
+
+  function deselectFigure(f) {
+    f.selected = false;
+    f.primary = false;
+    if (selected === f) selected = selectionList()[0] || null;
+    refreshPrimary();
+    updateUI();
+  }
+
+  function cineDeath(f) {
+    cine.koT = CINE_DEATH;
+    cine.koDur = CINE_DEATH;
+    cine.koFig = f;
+    cine.introT = 0;
+    cine.blastT = 0;
+  }
+
+  function removeSelectedFigures() {
+    const list = selectionList().slice();
+    if (!list.length) return;
+    for (const f of list) removeFigure(f, true);
+    flashStatus(list.length === 1 ? 'Figure removed' : `${list.length} figures removed`);
+  }
+
+  function removeFigure(f, silent = false) {
+    const index = figures.indexOf(f);
+    if (index < 0) return;
+    cancelChatFor(f);
+    cancelSpectating(f);
+    cancelPursuitsFor(f);
+    if (f.foe) endDuel(f);
+    for (const o of figures) {
+      if (o.spectating && (o.spectating.a === f || o.spectating.b === f)) {
+        o.spectating.leaving = 1.4;
+      }
+    }
+    if (fightPick === f) cancelFightPick();
+    if (drag) {
+      drag.items = drag.items.filter(item => item.f !== f);
+      if (!drag.items.length) drag = null;
+    }
+    f.dragging = false;
+    f.selected = false;
+    f.primary = false;
+    if (selected === f) selected = selectionList().find(o => o !== f) || null;
+    if (cine.koFig === f) cine.koT = 0;
+    if (cine.introA === f || cine.introB === f) cine.introT = 0;
+    if (cine.blastCaster === f || cine.blastTarget === f) cine.blastT = 0;
+    figures.splice(index, 1);
+    refreshPrimary();
+    updateUI();
+    if (!silent) flashStatus('Figure removed');
+  }
+
   function blastFigure(caster, target, cd = 4) {
     cancelChatFor(caster);
     cancelChatFor(target);
     cancelPursuitsFor(caster);
     cancelPursuitsFor(target);
+    cancelSpectating(caster);
+    cancelSpectating(target);
     cancelFightPick();
     const dir = target.x !== caster.x ? Math.sign(target.x - caster.x) : caster.facing;
     caster.powerCd = cd;
@@ -1153,6 +1363,16 @@ import { Level } from './level.js';
     audio.blast(panFor(caster.x));
     shakeAmt = Math.max(shakeAmt, 6);
     requestHitStop(0.04);
+    let lethal = false;
+    if (target.fighting) {
+      target.hp = Math.max(0, target.hp - 20);
+      lethal = target.hp <= 0;
+    }
+    if (lethal) {
+      beginDeath(target, caster);
+      flashStatus('Blast!', 1000);
+      return;
+    }
     target.resetCombat();
     target.blown = { vx: dir * 1250, vy: -260, phase: 'fly', t: 0 };
     target.vy = 0;
@@ -1196,6 +1416,10 @@ import { Level } from './level.js';
       this.fighting = false;
       this.foe = null;
       this.combatFloor = null;
+      this.hp = MAX_HP;
+      this.maxHp = MAX_HP;
+      this.dying = null;
+      this.spectating = null;
       this.pursuit = null;
       this.pursuedBy = null;
       this.fightTarget = false;
@@ -1250,6 +1474,10 @@ import { Level } from './level.js';
     startFight(foe) {
       this.fighting = true;
       this.foe = foe || null;
+      this.hp = MAX_HP;
+      this.maxHp = MAX_HP;
+      this.dying = null;
+      this.spectating = null;
       this.behavior = 'idle';
       this.phase = 0;
       this.vy = 0;
@@ -1285,6 +1513,7 @@ import { Level } from './level.js';
 
     randomizeBehavior(dt, groundY) {
       if (this.dragging) return;
+      if (this.dying || this.spectating) return;
       if (this.pursuit || this.pursuedBy) return;
       if (this.fighting) return;
       if (this.chatting) return;
@@ -1341,6 +1570,21 @@ import { Level } from './level.js';
       this.phase += dt * 1.6;
     }
 
+    _walkStep(dt, targetX, speed = 70) {
+      const dir = Math.sign(targetX - this.x) || this.facing;
+      this.facing = dir;
+      this.behavior = 'walk';
+      this.x += dir * speed * this.speedMul * dt;
+      this.x = clamp(this.x, 50, W - 50);
+      this.phase += dt * speed * 0.11 * this.speedMul;
+      const stepIdx = Math.floor(this.phase / Math.PI);
+      if (stepIdx !== this._stepPhase) {
+        this._stepPhase = stepIdx;
+        audio.step(panFor(this.x), false);
+        spawnStepDust(this.x, this.y, false, this.facing);
+      }
+    }
+
     _chatIdle(dt, level) {
       const sy = this._surfaceY(level);
       if (this.y < sy) {
@@ -1355,10 +1599,125 @@ import { Level } from './level.js';
         this.vy = 0;
       }
       this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 10));
-      this.behavior = 'idle';
+      if (chat && chat.phase === 'approach' && chat.a === this &&
+          Math.abs(chat.walkX - this.x) > 4) {
+        this._walkStep(dt, chat.walkX, 70);
+      } else {
+        this.behavior = 'idle';
+      }
       this.vy = 0;
       if (this.chatPartner) this.facing = this.chatPartner.x < this.x ? -1 : 1;
+      this.phase += this.behavior === 'walk' ? 0 : dt * 1.6;
+    }
+
+    _spectate(dt, level) {
+      const s = this.spectating;
+      if (!s) return;
+      if (!autonChk.checked) {
+        cancelSpectating(this);
+        return;
+      }
+      const a = s.a;
+      const b = s.b;
+      const live = a && b && a.fighting && b.fighting && a.foe === b && b.foe === a;
+      if (!live && !s.leaving) {
+        s.leaving = 1.4;
+        this.bubble = makeBubble(pick(['Good fight.', 'That was quick.', 'Ouch.']), 1.5);
+      }
+      const sy = this._surfaceY(level);
+      if (this.y < sy) {
+        this.vy += 1500 * dt;
+        this.y += this.vy * dt;
+        if (this.y >= sy) {
+          this.y = sy;
+          this.vy = 0;
+        }
+      } else {
+        this.y = sy;
+        this.vy = 0;
+      }
+      this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 10));
+      if (s.leaving > 0) {
+        s.leaving -= dt;
+        this.behavior = 'idle';
+        if (a && b) this.facing = (a.x + b.x) / 2 < this.x ? -1 : 1;
+        this.phase += dt * 1.6;
+        if (s.leaving <= 0) {
+          this.spectating = null;
+          this.think = 1 + Math.random() * 2;
+        }
+        return;
+      }
+      const mid = (a.x + b.x) / 2;
+      if (Math.abs(s.x - this.x) > 4) {
+        this._walkStep(dt, s.x, 70);
+        this.facing = mid < this.x ? -1 : 1;
+        return;
+      }
+      this.behavior = 'idle';
+      this.vy = 0;
+      this.facing = mid < this.x ? -1 : 1;
       this.phase += dt * 1.6;
+      s.commentT -= dt;
+      if (s.commentT <= 0 && spectatorCommentCd <= 0) {
+        const style = Math.random() < 0.3
+          ? (Math.random() < 0.5 ? a.style : b.style)
+          : null;
+        const line = style && SPECTATOR_STYLE_CHAT[style]
+          ? SPECTATOR_STYLE_CHAT[style]
+          : pick(SPECTATOR_CHAT);
+        this.bubble = makeBubble(line, 2.2);
+        s.commentT = 4 + Math.random() * 3;
+        spectatorCommentCd = 2.5 + Math.random() * 1.5;
+      }
+    }
+
+    updateDying(dt, level) {
+      const d = this.dying;
+      if (!d) return;
+      d.t += dt;
+      this.behavior = 'idle';
+      this.vy = 0;
+      this.phase += dt * 2;
+      const sy = this._surfaceY(level);
+      if (this.y < sy) {
+        this.vy += 1500 * dt;
+        this.y += this.vy * dt;
+        if (this.y >= sy) {
+          this.y = sy;
+          this.vy = 0;
+        }
+      } else {
+        this.y = sy;
+        this.vy = 0;
+      }
+      this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 10));
+      if (d.phase === 'fall') {
+        if (d.t >= DEATH_FALL) {
+          d.phase = 'down';
+          d.t = 0;
+          this.landT = 0.4;
+          spawnDust(this.x, this.y, reduceMotion ? 4 : 8);
+          audio.land(panFor(this.x), true);
+        }
+      } else if (d.phase === 'down') {
+        if (d.t >= DEATH_DOWN) {
+          d.phase = 'ascend';
+          d.t = 0;
+          d.rise = 0;
+          d.alpha = 1;
+          spawnRing(this.x, this.y - 30, 1.1);
+          spawnStar(this.x, this.y - 55, 1.2);
+          audio.whoosh(panFor(this.x), 1.1);
+        }
+      } else {
+        d.rise += (30 + d.t * 160) * dt;
+        d.alpha = 1 - smoothstep(0.15, DEATH_ASCEND, d.t);
+        if (d.t >= DEATH_ASCEND && !d.done) {
+          d.done = true;
+          pendingRemovals.push(this);
+        }
+      }
     }
 
     updatePursuit(dt, level) {
@@ -1530,8 +1889,18 @@ import { Level } from './level.js';
         return;
       }
 
+      if (this.dying) {
+        this.updateDying(dt, level);
+        return;
+      }
+
       if (this.chatting) {
         this._chatIdle(dt, level);
+        return;
+      }
+
+      if (this.spectating) {
+        this._spectate(dt, level);
         return;
       }
 
@@ -1681,7 +2050,7 @@ import { Level } from './level.js';
       }
 
       let moveSpeed = 0;
-      if (this.behavior === 'walk') moveSpeed = 90;
+      if (this.behavior === 'walk') moveSpeed = 70;
       else if (this.behavior === 'run') moveSpeed = 200;
       else if (this.behavior === 'crawl') moveSpeed = 45;
 
@@ -1713,7 +2082,8 @@ import { Level } from './level.js';
         ? `${this.combat.state}${this.combat.move ? ':' + this.combat.move : ''}`
         : '-';
       const blasted = this.blown ? this.blown.phase : '-';
-      return `${this.style}|${this.behavior}|${combat}|${blasted}|${this.dragging ? 'drag' : ''}`;
+      const dying = this.dying ? this.dying.phase : '-';
+      return `${this.style}|${this.behavior}|${combat}|${blasted}|${dying}|${this.dragging ? 'drag' : ''}`;
     }
 
     _tickBlend(dt) {
@@ -1744,9 +2114,10 @@ import { Level } from './level.js';
     }
 
     landHit(enemy, opts) {
-      const { range, kbx, kdChance = 0, freeze = 0.05, shake = 5, starScale = 1 } = opts;
+      const { range, kbx, kdChance = 0, freeze = 0.05, shake = 5, starScale = 1, damage = 0 } = opts;
       const dist = Math.abs(enemy.x - this.x);
       if (dist > range) return;
+      if (enemy.dying || !enemy.fighting) return;
       const es = enemy.combat.state;
       if (es === 'block') {
         this.x -= this.facing * 10;
@@ -1756,16 +2127,19 @@ import { Level } from './level.js';
         return;
       }
       if (es === 'dodge' && enemy.combat.t > 0.14) return;
-      if (es === 'stagger' || es === 'knockdown' || es === 'getup' || es === 'launched') return;      if (Math.random() < 0.25 && !opts.guaranteedKd) {
+      if (es === 'stagger' || es === 'knockdown' || es === 'getup' || es === 'launched') return;
+      if (Math.random() < 0.25 && !opts.guaranteedKd) {
         enemy.combat.state = 'dodge';
         enemy.combat.t = 0.3;
         audio.whoosh(panFor(enemy.x), 0.6);
         return;
       }
+      enemy.hp = Math.max(0, enemy.hp - damage);
+      const lethal = enemy.hp <= 0;
       const dir = enemy.x >= this.x ? 1 : -1;
       const midX = (this.x + enemy.x) / 2;
       const hitY = this.y - 55;
-      const knocked = opts.guaranteedKd || Math.random() < kdChance;
+      const knocked = lethal || opts.guaranteedKd || Math.random() < kdChance;
       const reactStrength = clamp(0.5 + kbx / 320, 0.5, 1.3);
       const reactKind = knocked || kbx >= 240 ? 'heavy' : kbx >= 150 || starScale >= 1.2 ? 'kick' : 'punch';
       if (knocked) {
@@ -1812,7 +2186,8 @@ import { Level } from './level.js';
       if (knocked || kbx >= 150) requestFlash(knocked ? 0.22 : 0.16, '#ffd54f');
       audio.hit(reactKind, clamp(0.75 + kbx / 420, 0.75, 1.35), panFor(midX));
       if (knocked && kbx >= 240) audio.ko(panFor(enemy.x));
-      if (knocked) cineKO(enemy);
+      if (lethal) beginDeath(enemy, this);
+      else if (knocked) cineKO(enemy);
     }
 
     updateFight(dt, level) {
@@ -1975,7 +2350,7 @@ import { Level } from './level.js';
           this.x = clamp(this.x, xMin, xMax);
           if (!c.kickDone && elapsed > 0.24 && Math.abs(enemy.x - this.x) <= 130) {
             c.kickDone = true;
-            this.landHit(enemy, { range: 130, kbx: 280, kdChance: 0.4, freeze: 0.07, shake: 10, starScale: 1.4 });
+            this.landHit(enemy, { range: 130, kbx: 280, kdChance: 0.4, freeze: 0.07, shake: 10, starScale: 1.4, damage: 18 });
             c.lungeV *= 0.3;
           }
         }
@@ -2003,7 +2378,7 @@ import { Level } from './level.js';
         this.x += this.facing * 60 * dt;
         if (!c.hitDone && elapsed > 0.18) {
           c.hitDone = true;
-          this.landHit(enemy, { range: 105, kbx: 210, kdChance: 0.2, freeze: 0.05, shake: 7, starScale: 1.15 });
+          this.landHit(enemy, { range: 105, kbx: 210, kdChance: 0.2, freeze: 0.05, shake: 7, starScale: 1.15, damage: 14 });
         }
         if (c.t <= 0) {
           c.spin = 0;
@@ -2022,7 +2397,7 @@ import { Level } from './level.js';
         this.x += this.facing * 45 * dt * (elapsed > 0.15 && elapsed < 0.35 ? 1 : 0);
         if (!c.hitDone && elapsed > 0.16) {
           c.hitDone = true;
-          this.landHit(enemy, { range: 95, kbx: 170, guaranteedKd: true, freeze: 0.06, shake: 8, starScale: 1.1 });
+          this.landHit(enemy, { range: 95, kbx: 170, guaranteedKd: true, freeze: 0.06, shake: 8, starScale: 1.1, damage: 9 });
         }
         if (c.t <= 0) {
           this.bodyScale = 1;
@@ -2043,7 +2418,7 @@ import { Level } from './level.js';
           this.bodyScale = lerp(0.85, 1.08, (elapsed - 0.16) / 0.1);
           if (!c.hitDone) {
             c.hitDone = true;
-            this.landHit(enemy, { range: 90, kbx: 100, freeze: 0.08, shake: 10, starScale: 1.5 });
+            this.landHit(enemy, { range: 90, kbx: 100, freeze: 0.08, shake: 10, starScale: 1.5, damage: 13 });
             if (enemy.combat.state === 'stagger') {
               enemy.combat.state = 'launched';
               enemy.combat.t = 0.6;
@@ -2077,7 +2452,8 @@ import { Level } from './level.js';
             range: hitRange,
             kbx: c.state === 'punch' ? 150 : 190,
             kdChance: c.state === 'kick' ? 0.1 : 0,
-            starScale: c.state === 'punch' ? 0.9 : 1.1
+            starScale: c.state === 'punch' ? 0.9 : 1.1,
+            damage: c.state === 'punch' ? 7 : 11
           });
         }
         if (c.t <= 0) {
@@ -2097,15 +2473,15 @@ import { Level } from './level.js';
         else if (elapsed > 0.6) this.x += this.facing * 100 * dt;
         if (!(c.hits & 1) && elapsed >= 0.14) {
           c.hits |= 1;
-          this.landHit(enemy, { range: 92, kbx: 50, starScale: 0.75, freeze: 0.03, shake: 3 });
+          this.landHit(enemy, { range: 92, kbx: 50, starScale: 0.75, freeze: 0.03, shake: 3, damage: 5 });
         }
         if (!(c.hits & 2) && elapsed >= 0.4) {
           c.hits |= 2;
-          this.landHit(enemy, { range: 92, kbx: 60, starScale: 0.8, freeze: 0.03, shake: 4 });
+          this.landHit(enemy, { range: 92, kbx: 60, starScale: 0.8, freeze: 0.03, shake: 4, damage: 5 });
         }
         if (!(c.hits & 4) && elapsed >= 0.66) {
           c.hits |= 4;
-          this.landHit(enemy, { range: 108, kbx: 200, kdChance: 0.18, starScale: 1.25, freeze: 0.06, shake: 8 });
+          this.landHit(enemy, { range: 108, kbx: 200, kdChance: 0.18, starScale: 1.25, freeze: 0.06, shake: 8, damage: 11 });
         }
         if (c.t <= 0) {
           c.state = 'ready';
@@ -2314,8 +2690,8 @@ import { Level } from './level.js';
       }
 
       let hip, chest, neck, head;
-      const fightingPose = this.fighting && !this.dragging;
-      const combatState = fightingPose ? this.combat.state : '';
+      const fightingPose = (this.fighting || this.dying) && !this.dragging;
+      const combatState = this.dying ? 'knockdown' : (fightingPose ? this.combat.state : '');
       let spineBend = clamp(-lean * 0.16, -0.09, 0.09);
       if (combatState === 'punch' || combatState === 'combo' ||
           (combatState === 'strike' && /chainpunch|elbow/.test(this.combat.move))) spineBend += 0.04 * f;
@@ -2329,7 +2705,15 @@ import { Level } from './level.js';
       let downElapsed = 0;
       let settle = 0;
 
-      if (this.blown) {
+      if (this.dying) {
+        if (this.dying.phase === 'fall') {
+          down = smoothstep(0, DEATH_FALL, this.dying.t);
+        } else if (this.dying.phase === 'down') {
+          down = 1;
+        } else {
+          down = 1 - smoothstep(0, DEATH_ASCEND, this.dying.t);
+        }
+      } else if (this.blown) {
         if (this.blown.phase === 'down') down = 1;
         else if (this.blown.phase === 'getup') {
           downElapsed = clamp((0.4 - this.blown.t) / 0.4, 0, 1);
@@ -2723,6 +3107,14 @@ import { Level } from './level.js';
       const hipF = { x: hip.x + f * 2.2 * s, y: hip.y };
       const hipB = { x: hip.x - f * 2.2 * s, y: hip.y - 0.4 * s };
 
+      if (this.dying && this.dying.phase === 'ascend') {
+        const a = smoothstep(0, 0.35, this.dying.t);
+        la = lerp(la, -1.15, a); la2 = lerp(la2, 0.35, a);
+        ra = lerp(ra, -0.95, a); ra2 = lerp(ra2, 0.4, a);
+        lHip = lerp(lHip, 0.12, a); rHip = lerp(rHip, -0.08, a);
+        lKnee = lerp(lKnee, -0.15, a); rKnee = lerp(rKnee, -0.1, a);
+      }
+
       let armL, armR, legL, legR;
 
       if (crawling) {
@@ -2790,7 +3182,7 @@ import { Level } from './level.js';
     }
 
     _tickFace(dt) {
-      const busy = this.fighting || (this.blown && this.blown.phase !== 'down');
+      const busy = this.fighting || this.dying || (this.blown && this.blown.phase !== 'down');
       if (busy) {
         this.blinkT = 0;
         return;
@@ -2804,6 +3196,7 @@ import { Level } from './level.js';
     }
 
     faceMood() {
+      if (this.dying) return this.dying.phase === 'ascend' ? 'surprised' : 'dizzy';
       if (this.blown && (this.blown.phase === 'down' || this.blown.phase === 'getup')) return 'dizzy';
       if (this.fighting) {
         const cs = this.combat.state;
@@ -3135,8 +3528,27 @@ import { Level } from './level.js';
       }
 
       ctx.save();
-      ctx.translate(this.x, this.y);
+      ctx.translate(this.x, this.y - (this.dying ? this.dying.rise : 0));
+      ctx.globalAlpha = this.dying ? this.dying.alpha : 1;
       this.drawSpeedLines(ctx, pose);
+
+      if ((this.fighting || this.dying) && this.maxHp) {
+        const bw = 40, bh = 5;
+        const bx = head.x - bw / 2;
+        const by = head.y - headR - 36;
+        const frac = clamp(this.hp / this.maxHp, 0, 1);
+        ctx.save();
+        ctx.fillStyle = 'rgba(247, 246, 242, 0.9)';
+        ctx.fillRect(bx - 1.5, by - 1.5, bw + 3, bh + 3);
+        ctx.strokeStyle = 'rgba(27, 26, 23, 0.75)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(bx - 1.5, by - 1.5, bw + 3, bh + 3);
+        if (frac > 0) {
+          ctx.fillStyle = frac > 0.55 ? '#b23a2f' : frac > 0.25 ? '#c25a2a' : '#8e1f1a';
+          ctx.fillRect(bx, by, bw * frac, bh);
+        }
+        ctx.restore();
+      }
 
       if (this.fighting && this.combat.spin) {
         ctx.translate(0, hip.y);
@@ -3204,6 +3616,27 @@ import { Level } from './level.js';
         ctx.fill();
       }
 
+      if (this.dying && this.dying.phase === 'ascend') {
+        const flap = Math.sin(performance.now() / 130) * 0.12;
+        ctx.save();
+        ctx.strokeStyle = 'rgba(247, 246, 242, 0.82)';
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.moveTo(chest.x - 2, chest.y - 4);
+        ctx.quadraticCurveTo(chest.x - 26, chest.y - 20 + flap * 20, chest.x - 34, chest.y + 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(chest.x + 2, chest.y - 4);
+        ctx.quadraticCurveTo(chest.x + 26, chest.y - 20 - flap * 20, chest.x + 34, chest.y + 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.ellipse(head.x, head.y - headR - 7, headR + 5, 4, 0, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(242, 201, 76, 0.9)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.restore();
+      }
+
       strokeLimb(legL);
       strokeLimb(legR);
       strokeLimb(armL);
@@ -3229,9 +3662,9 @@ import { Level } from './level.js';
 
       this.drawFace(ctx, pose, headR);
 
-      if (this.hasPower) {
+      if (this.hasPower && !this.dying) {
         const pulse = 1 + Math.sin(performance.now() / 300) * 0.08;
-        const by = head.y - headR - (this.selected ? 45 : 22);
+        const by = head.y - headR - (this.fighting ? 56 : this.selected ? 45 : 22);
         ctx.save();
         ctx.translate(head.x, by);
         ctx.scale(pulse, pulse);
@@ -3323,7 +3756,8 @@ import { Level } from './level.js';
     if (!autonChk.checked || fightPick) return null;
     const eligible = figures.filter(f =>
       !f.chatting && !f.fighting && !f.pursuit && !f.pursuedBy &&
-      !f.blown && !f.dragging && f.behavior !== 'jump' &&
+      !f.blown && !f.dragging && !f.spectating && !f.dying &&
+      f.behavior !== 'jump' &&
       f.chatCd <= 0 && f.vy === 0 &&
       level.floorAt(f.x, f.y) >= 0 && !level.isOnStairs(f.x) &&
       Math.abs(f.y - level.surfaceAt(f.x, f.y)) <= 18
@@ -3339,6 +3773,56 @@ import { Level } from './level.js';
       }
     }
     return pairs.length ? pick(pairs) : null;
+  }
+
+  function findChatApproach() {
+    if (!autonChk.checked || fightPick) return null;
+    const eligible = figures.filter(f =>
+      !f.chatting && !f.fighting && !f.pursuit && !f.pursuedBy &&
+      !f.blown && !f.dragging && !f.spectating && !f.dying &&
+      f.behavior !== 'jump' &&
+      f.chatCd <= 0 && f.vy === 0 &&
+      level.floorAt(f.x, f.y) >= 0 && !level.isOnStairs(f.x) &&
+      Math.abs(f.y - level.surfaceAt(f.x, f.y)) <= 18
+    );
+    const pairs = [];
+    for (let i = 0; i < eligible.length; i++) {
+      for (let j = i + 1; j < eligible.length; j++) {
+        const a = eligible[i];
+        const b = eligible[j];
+        if (level.floorAt(a.x, a.y) !== level.floorAt(b.x, b.y)) continue;
+        const d = Math.abs(a.x - b.x);
+        if (d < 120 || d > 600) continue;
+        if (level.floorAt(a.x, a.y) === 0) {
+          const mid = (a.x + b.x) / 2;
+          if (mid < level.stairX0 && Math.max(a.x, b.x) >= level.stairX0) continue;
+          if (mid > level.stairX1 && Math.min(a.x, b.x) <= level.stairX1) continue;
+        }
+        pairs.push([a, b]);
+      }
+    }
+    return pairs.length ? pick(pairs) : null;
+  }
+
+  function startChatApproach(a, b) {
+    if (chat || !a || !b) return;
+    const dir = b.x > a.x ? 1 : -1;
+    const floor = level.floorAt(a.x, a.y);
+    const bnd = level.floorBounds(floor);
+    const walkX = clamp(b.x - dir * 64, bnd.x0 + 20, bnd.x1 - 20);
+    chat = { a, b, phase: 'approach', t: 0, walkX, opener: null, reply: null };
+    for (const f of [a, b]) {
+      f.chatting = true;
+      f.chatPartner = f === a ? b : a;
+      f.chatCd = 25 + Math.random() * 20;
+      f.bubble = null;
+      f.think = 999;
+      f.vy = 0;
+    }
+    a.setBehavior('walk');
+    b.setBehavior('idle');
+    a.facing = dir;
+    b.facing = -dir;
   }
 
   function startChat(a, b) {
@@ -3368,7 +3852,13 @@ import { Level } from './level.js';
       return;
     }
     if (chatCd > 0) chatCd -= dt;
-    for (const f of figures) if (f.chatCd > 0) f.chatCd -= dt;
+    for (const f of figures) {
+      if (f.chatCd > 0) f.chatCd -= dt;
+      if (f.bubble) {
+        f.bubble.age += dt;
+        if (f.bubble.age >= f.bubble.life) f.bubble = null;
+      }
+    }
 
     if (chat) {
       const { a, b } = chat;
@@ -3377,16 +3867,34 @@ import { Level } from './level.js';
       if (!a || !b || a.chatPartner !== b || b.chatPartner !== a ||
           a.fighting || b.fighting || a.blown || b.blown ||
           a.dragging || b.dragging || a.pursuit || b.pursuit ||
-          a.pursuedBy || b.pursuedBy ||
+          a.pursuedBy || b.pursuedBy || a.dying || b.dying ||
           floorA < 0 || floorA !== floorB) {
         cancelChat();
         return;
       }
-      for (const f of [a, b]) {
-        if (f.bubble) {
-          f.bubble.age += dt;
-          if (f.bubble.age >= f.bubble.life) f.bubble = null;
+      if (chat.phase === 'approach') {
+        chat.t += dt;
+        const arrived = Math.abs(a.x - chat.walkX) <= 4;
+        if (arrived || chat.t >= CHAT_APPROACH) {
+          if (arrived) {
+            const sameStyle = a.style === b.style && STYLE_CHAT[a.style];
+            const line = sameStyle && Math.random() < 0.35
+              ? pick(STYLE_CHAT[a.style])
+              : pick(CHAT_SCRIPT);
+            chat.phase = 'open';
+            chat.t = CHAT_OPEN;
+            chat.opener = line[0];
+            chat.reply = line[1];
+            a.setBehavior('idle');
+            b.setBehavior('idle');
+            a.facing = b.x < a.x ? -1 : 1;
+            b.facing = a.x < b.x ? -1 : 1;
+            a.bubble = makeBubble(line[0], CHAT_OPEN + 0.2);
+          } else {
+            cancelChat();
+          }
         }
+        return;
       }
       if (chat.phase === 'open') {
         chat.t -= dt;
@@ -3411,8 +3919,18 @@ import { Level } from './level.js';
 
     if (chatCd > 0) return;
     const pair = findChatPair();
-    if (pair) startChat(pair[0], pair[1]);
-    else chatCd = 2 + Math.random() * 2;
+    if (pair) {
+      startChat(pair[0], pair[1]);
+      return;
+    }
+    if (Math.random() < 0.58) {
+      const approach = findChatApproach();
+      if (approach) {
+        startChatApproach(approach[0], approach[1]);
+        return;
+      }
+    }
+    chatCd = 2 + Math.random() * 2;
   }
 
   function wrapBubbleText(text, maxWidth) {
@@ -3589,7 +4107,7 @@ import { Level } from './level.js';
       o !== f &&
       f.isEnemy(o) &&
       !o.fighting && !o.blown && !o.dragging &&
-      !o.pursuit && !o.pursuedBy &&
+      !o.pursuit && !o.pursuedBy && !o.dying &&
       floorOf(o) >= 0
     );
   }
@@ -3600,13 +4118,14 @@ import { Level } from './level.js';
       o !== f &&
       f.isEnemy(o) &&
       !o.fighting && !o.blown && !o.dragging &&
-      !o.pursuit && !o.pursuedBy &&
+      !o.pursuit && !o.pursuedBy && !o.dying &&
       level.isOnStairs(o.x)
     );
   }
 
   function fightTargetError(attacker, target) {
     if (!attacker.isEnemy(target)) return 'Pick another color';
+    if (target.dying) return 'Unavailable';
     if (target.fighting) return 'Already fighting';
     if (target.blown || target.dragging) return 'Unavailable';
     if (target.pursuit || target.pursuedBy) return 'Already busy';
@@ -3634,6 +4153,8 @@ import { Level } from './level.js';
   function beginPursuit(attacker, target) {
     cancelChatFor(attacker);
     cancelChatFor(target);
+    cancelSpectating(attacker);
+    cancelSpectating(target);
     for (const f of figures) if (f.pursuit) cancelPursuit(f);
     if (fightPick) {
       fightPick = null;
@@ -3759,6 +4280,7 @@ import { Level } from './level.js';
       powerGlyph.title = '';
     }
     revokeBtn.hidden = !(has && selected.hasPower);
+    removeBtn.hidden = !has;
 
     const flashing = performance.now() < statusFlash.until;
     colorPicker.disabled = !has;
@@ -3830,6 +4352,7 @@ import { Level } from './level.js';
     autonChk.addEventListener('change', () => {
       if (!autonChk.checked) {
         cancelChat();
+        for (const f of figures) cancelSpectating(f);
       } else {
         chatCd = 8 + Math.random() * 7;
       }
@@ -3889,6 +4412,7 @@ import { Level } from './level.js';
     btn.addEventListener('click', () => {
       if (!selected) return;
       cancelChatFor(selected);
+      cancelSpectating(selected);
       if (btn.dataset.action === 'power') {
         if (selected.blown) return;
         if (fightPick) cancelFightPick();
@@ -3908,7 +4432,7 @@ import { Level } from './level.js';
           if (!target) {
             let best = Infinity;
             for (const f of figures) {
-              if (f === selected || f.selected || f.dragging || f.blown) continue;
+              if (f === selected || f.selected || f.dragging || f.blown || f.dying) continue;
               const d = Math.abs(f.x - selected.x);
               if (d < best) { best = d; target = f; }
             }
@@ -3956,6 +4480,7 @@ import { Level } from './level.js';
         if (fightPick) cancelFightPick();
         for (const f of selectionList()) {
           cancelChatFor(f);
+          cancelSpectating(f);
           if (f.pursuedBy) cancelPursuit(f.pursuedBy);
           if (f.pursuit) cancelPursuit(f);
           if (f.fighting) endDuel(f);
@@ -3975,6 +4500,8 @@ import { Level } from './level.js';
     updateUI();
   });
 
+  removeBtn.addEventListener('click', removeSelectedFigures);
+
   const KEY_ACTIONS = {
     '1': 'idle', '2': 'crawl', '3': 'walk', '4': 'run', '5': 'jump',
     f: 'fight', p: 'power',
@@ -3984,6 +4511,11 @@ import { Level } from './level.js';
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
     const key = e.key.toLowerCase();
+    if ((key === 'delete' || key === 'backspace') && selectionList().length) {
+      e.preventDefault();
+      removeSelectedFigures();
+      return;
+    }
     if (key === 'escape') {
       if (fightPick) {
         e.preventDefault();
@@ -4043,6 +4575,7 @@ import { Level } from './level.js';
     if (fightPick) {
       let hitTarget = null;
       for (let i = figures.length - 1; i >= 0; i--) {
+        if (figures[i].dying) continue;
         if (figures[i].hit(x, y)) { hitTarget = figures[i]; break; }
       }
       if (!hitTarget || hitTarget === fightPick) {
@@ -4068,6 +4601,7 @@ import { Level } from './level.js';
     const additive = e.shiftKey || e.metaKey || e.ctrlKey;
     let hitFig = null;
     for (let i = figures.length - 1; i >= 0; i--) {
+      if (figures[i].dying) continue;
       if (figures[i].hit(x, y)) { hitFig = figures[i]; break; }
     }
     if (hitFig) {
@@ -4089,6 +4623,7 @@ import { Level } from './level.js';
       const group = selectionList();
       for (const f of group) {
         cancelChatFor(f);
+        cancelSpectating(f);
         if (f.pursuit) cancelPursuit(f);
         if (f.pursuedBy) cancelPursuit(f.pursuedBy);
       }
@@ -4195,6 +4730,8 @@ import { Level } from './level.js';
       updateBirds(dt);
       updateEffects(dt);
       updateSplats(dt);
+      spectatorCommentCd = Math.max(0, spectatorCommentCd - dt);
+      flushDeaths();
     }
 
     for (const f of figures) f._renderPose = f.pose();
