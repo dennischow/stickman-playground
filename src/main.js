@@ -106,6 +106,50 @@ import { Level } from './level.js';
     f.combat.spin = 0;
   }
 
+  const CHAT_OPEN = 2.4;
+  const CHAT_REPLY = 2.4;
+  const CHAT_GAP = 0.25;
+  const CHAT_SCRIPT = [
+    ['Nice day for standing around.', 'Beats falling down stairs.'],
+    ["You ever wonder why we're all sticks?", 'Nope. Just happy to be drawn.'],
+    ['Paper or wood?', 'Paper. Fewer splinters.'],
+    ['Did you see that blast?', 'Felt it from here.'],
+    ['Why is the camera always watching?', "Because we're the show."],
+    ['I think the user is looking at us.', 'Wave. Look busy.'],
+    ['I could go for a walk.', 'You walked here.'],
+    ['Ever tried the stairs?', 'Once. My legs are still complaining.'],
+    ['That was a nice kick.', "Thanks. I've been practicing on the air."],
+    ['Do you ever win?', 'I prefer to think of it as dramatic losing.'],
+    ["What's your style?", 'Mostly improvised.'],
+    ["I'm bored.", "Try standing very still. It's free."],
+    ['Is it always this quiet?', 'Until someone presses F.'],
+    ['Nice guard.', "Thanks. It's mostly hope."],
+    ['If I fall, do I make a sound?', 'Yes. A loud one.'],
+    ['The floor is looking sturdy today.', "Don't jinx it."],
+    ["Do you think we're in a game?", "I think we're in a drawing."],
+    ["What's the plan?", 'Stand here until something happens.'],
+    ['You blinked.', "I don't have eyelids."]
+  ];
+  const STYLE_CHAT = {
+    wingchun: [
+      ['Keep the centerline.', 'Always.'],
+      ['Chain punches, not feelings.', 'Too late.'],
+      ['Stay relaxed.', "I'm trying."]
+    ],
+    muaythai: [
+      ['Elbows up.', 'Knees ready.'],
+      ['The teep is underrated.', 'So is breathing.'],
+      ["No clinch. We're sticks.", 'Fair.']
+    ],
+    brawler: [
+      ['No style. Just vibes.', 'Vibes are a style.'],
+      ['I just swing.', 'It shows.'],
+      ['Keep it simple.', 'Simple is hard.']
+    ]
+  };
+  let chat = null;
+  let chatCd = 8 + Math.random() * 7;
+
   const SCENES = {
     paper: { label: 'Paper', src: null, veil: 0 },
     lake: { label: 'Lake', src: '/backgrounds/lake.jpg', veil: 0.32 },
@@ -120,8 +164,11 @@ import { Level } from './level.js';
     if (savedScene && SCENES[savedScene]) sceneId = savedScene;
   } catch (err) {}
   let sceneDirty = true;
+  let celestialStamp = Math.floor(Date.now() / 60000);
   const sceneCanvas = document.createElement('canvas');
   const sceneCtx = sceneCanvas.getContext('2d');
+  const birds = [];
+  let birdTimer = 8 + Math.random() * 7;
   const sceneImages = {};
   for (const [id, sc] of Object.entries(SCENES)) {
     if (!sc.src) continue;
@@ -164,6 +211,138 @@ import { Level } from './level.js';
     c.restore();
   }
 
+  function utcStamp() {
+    return Math.floor(Date.now() / 60000);
+  }
+
+  function celestialTheta() {
+    const now = new Date();
+    const h = now.getUTCHours() + now.getUTCMinutes() / 60;
+    return (h / 24) * Math.PI * 2 - Math.PI / 2;
+  }
+
+  function drawSun(c, x, y, r, alpha) {
+    c.save();
+    c.globalAlpha = alpha;
+    const halo = c.createRadialGradient(x, y, r * 0.5, x, y, r * 2.4);
+    halo.addColorStop(0, 'rgba(242, 201, 76, 0.32)');
+    halo.addColorStop(0.55, 'rgba(242, 201, 76, 0.12)');
+    halo.addColorStop(1, 'rgba(242, 201, 76, 0)');
+    c.fillStyle = halo;
+    c.beginPath();
+    c.arc(x, y, r * 2.4, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = '#f2c94c';
+    c.beginPath();
+    c.arc(x, y, r, 0, Math.PI * 2);
+    c.fill();
+    c.strokeStyle = 'rgba(168, 111, 0, 0.30)';
+    c.lineWidth = 1.2;
+    c.stroke();
+    c.restore();
+  }
+
+  function drawMoon(c, x, y, r, alpha) {
+    c.save();
+    c.globalAlpha = alpha;
+    const halo = c.createRadialGradient(x, y, r * 0.6, x, y, r * 2.1);
+    halo.addColorStop(0, 'rgba(244, 241, 232, 0.30)');
+    halo.addColorStop(1, 'rgba(244, 241, 232, 0)');
+    c.fillStyle = halo;
+    c.beginPath();
+    c.arc(x, y, r * 2.1, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = '#f4f1e8';
+    c.beginPath();
+    c.arc(x, y, r, 0, Math.PI * 2);
+    c.fill();
+    c.strokeStyle = 'rgba(27, 26, 23, 0.24)';
+    c.lineWidth = 1.2;
+    c.stroke();
+    c.fillStyle = 'rgba(27, 26, 23, 0.10)';
+    c.beginPath();
+    c.arc(x - r * 0.28, y - r * 0.2, r * 0.18, 0, Math.PI * 2);
+    c.fill();
+    c.beginPath();
+    c.arc(x + r * 0.22, y + r * 0.12, r * 0.13, 0, Math.PI * 2);
+    c.fill();
+    c.beginPath();
+    c.arc(x - r * 0.05, y + r * 0.38, r * 0.10, 0, Math.PI * 2);
+    c.fill();
+    c.restore();
+  }
+
+  function drawCelestial(c, alpha) {
+    const theta = celestialTheta();
+    const r = clamp(Math.min(W, H) * 0.026, 14, 30);
+    const sunA = smoothstep(0, 0.1, Math.sin(theta)) * alpha;
+    const moonA = smoothstep(0, 0.1, Math.sin(theta + Math.PI)) * alpha;
+    if (sunA > 0.01) {
+      const x = W / 2 - Math.cos(theta) * W * 0.42;
+      const y = H * 0.5 - Math.sin(theta) * H * 0.30;
+      drawSun(c, x, y, r, sunA);
+    }
+    if (moonA > 0.01) {
+      const mt = theta + Math.PI;
+      const x = W / 2 - Math.cos(mt) * W * 0.42;
+      const y = H * 0.5 - Math.sin(mt) * H * 0.30;
+      drawMoon(c, x, y, r, moonA);
+    }
+  }
+
+  function spawnBirdFlock() {
+    const count = reduceMotion ? 2 : 2 + Math.floor(Math.random() * 4);
+    const dir = Math.random() < 0.5 ? -1 : 1;
+    const baseY = H * (0.12 + Math.random() * 0.18);
+    const speed = (20 + Math.random() * 20) * dir;
+    for (let i = 0; i < count; i++) {
+      birds.push({
+        x: dir > 0 ? -24 - i * 18 - Math.random() * 36 : W + 24 + i * 18 + Math.random() * 36,
+        baseY: baseY + (Math.random() - 0.5) * 34,
+        y: baseY,
+        vx: speed * (0.9 + Math.random() * 0.2),
+        size: 4 + Math.random() * 4,
+        flap: 4.5 + Math.random() * 4,
+        wobble: 2 + Math.random() * 3,
+        phase: Math.random() * Math.PI * 2,
+        t: 0
+      });
+    }
+  }
+
+  function updateBirds(dt) {
+    birdTimer -= dt;
+    if (birdTimer <= 0) {
+      spawnBirdFlock();
+      const night = Math.sin(celestialTheta()) < -0.05;
+      birdTimer = night ? 40 + Math.random() * 30 : 25 + Math.random() * 20;
+    }
+    for (let i = birds.length - 1; i >= 0; i--) {
+      const b = birds[i];
+      b.t += dt;
+      b.x += b.vx * dt;
+      b.y = b.baseY + Math.sin(b.t * 0.9 + b.phase) * b.wobble;
+      if (b.x < -80 || b.x > W + 80) birds.splice(i, 1);
+    }
+  }
+
+  function drawBirds(c) {
+    c.save();
+    c.strokeStyle = 'rgba(27, 26, 23, 0.55)';
+    c.lineWidth = 1.4;
+    c.lineCap = 'round';
+    for (const b of birds) {
+      const flap = reduceMotion ? 0.25 : Math.sin(b.t * b.flap + b.phase);
+      const wy = b.size * (0.35 + flap * 0.45);
+      c.beginPath();
+      c.moveTo(b.x - b.size, b.y - wy);
+      c.quadraticCurveTo(b.x - b.size * 0.42, b.y - wy * 0.2, b.x, b.y);
+      c.quadraticCurveTo(b.x + b.size * 0.42, b.y - wy * 0.2, b.x + b.size, b.y - wy);
+      c.stroke();
+    }
+    c.restore();
+  }
+
   function renderScene() {
     sceneCanvas.width = Math.max(1, Math.floor(W * DPR));
     sceneCanvas.height = Math.max(1, Math.floor(H * DPR));
@@ -180,6 +359,7 @@ import { Level } from './level.js';
       sceneCtx.filter = 'saturate(0.78) contrast(0.96)';
       sceneCtx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
       sceneCtx.restore();
+      drawCelestial(sceneCtx, 0.5);
       sceneCtx.globalAlpha = sc.veil;
       sceneCtx.fillStyle = bg;
       sceneCtx.fillRect(0, 0, W, H);
@@ -189,6 +369,7 @@ import { Level } from './level.js';
     } else {
       sceneCtx.fillStyle = bg;
       sceneCtx.fillRect(0, 0, W, H);
+      drawCelestial(sceneCtx, 1);
       level.draw(sceneCtx);
       drawGround(sceneCtx, false);
     }
@@ -842,6 +1023,8 @@ import { Level } from './level.js';
   }
 
   function startDuel(a, b) {
+    cancelChatFor(a);
+    cancelChatFor(b);
     cancelPursuitsFor(a);
     cancelPursuitsFor(b);
     cancelFightPick();
@@ -876,6 +1059,8 @@ import { Level } from './level.js';
   }
 
   function blastFigure(caster, target, cd = 4) {
+    cancelChatFor(caster);
+    cancelChatFor(target);
     cancelPursuitsFor(caster);
     cancelPursuitsFor(target);
     cancelFightPick();
@@ -937,6 +1122,10 @@ import { Level } from './level.js';
       this.pursuit = null;
       this.pursuedBy = null;
       this.fightTarget = false;
+      this.chatting = false;
+      this.chatPartner = null;
+      this.chatCd = 0;
+      this.bubble = null;
       this.trail = [];
       this.combat = {
         state: 'idle', t: 0, cd: 0.4 + Math.random() * 0.6,
@@ -1021,6 +1210,7 @@ import { Level } from './level.js';
       if (this.dragging) return;
       if (this.pursuit || this.pursuedBy) return;
       if (this.fighting) return;
+      if (this.chatting) return;
       if (this.blown) return;
       if (!autonChk.checked) return;
       if (this.y < groundY - 2) return;
@@ -1071,6 +1261,26 @@ import { Level } from './level.js';
       this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 10));
       this.behavior = 'idle';
       this.facing = this.pursuedBy.x < this.x ? -1 : 1;
+      this.phase += dt * 1.6;
+    }
+
+    _chatIdle(dt, level) {
+      const sy = this._surfaceY(level);
+      if (this.y < sy) {
+        this.vy += 1500 * dt;
+        this.y += this.vy * dt;
+        if (this.y >= sy) {
+          this.y = sy;
+          this.vy = 0;
+        }
+      } else {
+        this.y = sy;
+        this.vy = 0;
+      }
+      this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 10));
+      this.behavior = 'idle';
+      this.vy = 0;
+      if (this.chatPartner) this.facing = this.chatPartner.x < this.x ? -1 : 1;
       this.phase += dt * 1.6;
     }
 
@@ -1240,6 +1450,11 @@ import { Level } from './level.js';
       if (this.dragging) {
         this.vy = 0;
         this.phase += dt * 2;
+        return;
+      }
+
+      if (this.chatting) {
+        this._chatIdle(dt, level);
         return;
       }
 
@@ -2529,7 +2744,11 @@ import { Level } from './level.js';
 
     faceDir(head) {
       let tx, ty;
-      if (this.fighting && this.foe) {
+      if (this.chatting && this.chatPartner) {
+        const cp = this.chatPartner._renderPose || this.chatPartner.pose();
+        tx = this.chatPartner.x + cp.head.x;
+        ty = this.chatPartner.y + cp.head.y;
+      } else if (this.fighting && this.foe) {
         const fp = this.foe._renderPose || this.foe.pose();
         tx = this.foe.x + fp.head.x;
         ty = this.foe.y + fp.head.y;
@@ -3000,6 +3219,253 @@ import { Level } from './level.js';
     }
   }
 
+  function makeBubble(text, life = 2.6) {
+    return { text, age: 0, life };
+  }
+
+  function cancelChat() {
+    if (!chat) return;
+    const a = chat.a;
+    const b = chat.b;
+    for (const f of [a, b]) {
+      if (!f) continue;
+      f.chatting = false;
+      f.chatPartner = null;
+      f.bubble = null;
+      f.think = 2 + Math.random() * 3;
+    }
+    chat = null;
+    chatCd = 15 + Math.random() * 10;
+  }
+
+  function cancelChatFor(f) {
+    if (chat && (chat.a === f || chat.b === f)) cancelChat();
+  }
+
+  function findChatPair() {
+    if (!autonChk.checked || fightPick) return null;
+    const eligible = figures.filter(f =>
+      !f.chatting && !f.fighting && !f.pursuit && !f.pursuedBy &&
+      !f.blown && !f.dragging && f.behavior !== 'jump' &&
+      f.chatCd <= 0 && f.vy === 0 &&
+      level.floorAt(f.x, f.y) >= 0 && !level.isOnStairs(f.x) &&
+      Math.abs(f.y - level.surfaceAt(f.x, f.y)) <= 18
+    );
+    const pairs = [];
+    for (let i = 0; i < eligible.length; i++) {
+      for (let j = i + 1; j < eligible.length; j++) {
+        const a = eligible[i];
+        const b = eligible[j];
+        if (level.floorAt(a.x, a.y) !== level.floorAt(b.x, b.y)) continue;
+        const d = Math.abs(a.x - b.x);
+        if (d >= 80 && d <= 260) pairs.push([a, b]);
+      }
+    }
+    return pairs.length ? pick(pairs) : null;
+  }
+
+  function startChat(a, b) {
+    if (chat || !a || !b) return;
+    const sameStyle = a.style === b.style && STYLE_CHAT[a.style];
+    const line = sameStyle && Math.random() < 0.35
+      ? pick(STYLE_CHAT[a.style])
+      : pick(CHAT_SCRIPT);
+    chat = { a, b, phase: 'open', t: CHAT_OPEN, opener: line[0], reply: line[1] };
+    for (const f of [a, b]) {
+      f.chatting = true;
+      f.chatPartner = f === a ? b : a;
+      f.chatCd = 25 + Math.random() * 20;
+      f.bubble = null;
+      f.setBehavior('idle');
+      f.think = 999;
+      f.vy = 0;
+    }
+    a.facing = b.x < a.x ? -1 : 1;
+    b.facing = a.x < b.x ? -1 : 1;
+    a.bubble = makeBubble(line[0], CHAT_OPEN + 0.2);
+  }
+
+  function updateChat(dt) {
+    if (!autonChk.checked) {
+      cancelChat();
+      return;
+    }
+    if (chatCd > 0) chatCd -= dt;
+    for (const f of figures) if (f.chatCd > 0) f.chatCd -= dt;
+
+    if (chat) {
+      const { a, b } = chat;
+      const floorA = a ? level.floorAt(a.x, a.y) : -1;
+      const floorB = b ? level.floorAt(b.x, b.y) : -1;
+      if (!a || !b || a.chatPartner !== b || b.chatPartner !== a ||
+          a.fighting || b.fighting || a.blown || b.blown ||
+          a.dragging || b.dragging || a.pursuit || b.pursuit ||
+          a.pursuedBy || b.pursuedBy ||
+          floorA < 0 || floorA !== floorB) {
+        cancelChat();
+        return;
+      }
+      for (const f of [a, b]) {
+        if (f.bubble) {
+          f.bubble.age += dt;
+          if (f.bubble.age >= f.bubble.life) f.bubble = null;
+        }
+      }
+      if (chat.phase === 'open') {
+        chat.t -= dt;
+        if (chat.t <= 0) {
+          a.bubble = null;
+          chat.phase = 'gap';
+          chat.t = CHAT_GAP;
+        }
+      } else if (chat.phase === 'gap') {
+        chat.t -= dt;
+        if (chat.t <= 0) {
+          chat.phase = 'reply';
+          chat.t = CHAT_REPLY;
+          b.bubble = makeBubble(chat.reply, CHAT_REPLY + 0.2);
+        }
+      } else {
+        chat.t -= dt;
+        if (chat.t <= 0) cancelChat();
+      }
+      return;
+    }
+
+    if (chatCd > 0) return;
+    const pair = findChatPair();
+    if (pair) startChat(pair[0], pair[1]);
+    else chatCd = 2 + Math.random() * 2;
+  }
+
+  function wrapBubbleText(text, maxWidth) {
+    ctx.save();
+    ctx.font = '12px system-ui, -apple-system, sans-serif';
+    const words = text.split(/\s+/);
+    const lines = [];
+    let line = '';
+    for (const word of words) {
+      const next = line ? `${line} ${word}` : word;
+      if (line && ctx.measureText(next).width > maxWidth) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = next;
+      }
+      if (lines.length === 3) break;
+    }
+    if (line && lines.length < 3) lines.push(line);
+    if (lines.length === 3 && words.join(' ') !== lines.join(' ')) {
+      let last = lines[2];
+      while (last.length > 1 && ctx.measureText(last + '…').width > maxWidth) {
+        last = last.slice(0, -1);
+      }
+      lines[2] = last + '…';
+    }
+    ctx.restore();
+    return lines.length ? lines : [text];
+  }
+
+  function drawBubbles() {
+    const lb = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--letterbox-h')) || 0;
+    const topSafe = (toolbar ? toolbar.offsetHeight : 48) + (cinematicOn ? lb + 8 : 8);
+    const bottomSafe = H - (cinematicOn ? lb + 8 : 60);
+    for (const f of figures) {
+      const bubble = f.bubble;
+      if (!bubble) continue;
+      const pose = f._renderPose || f.pose();
+      const head = pose.head;
+      const anchor = camera.worldToScreen(
+        f.x + head.x,
+        f.y + head.y - pose.headR - 10
+      );
+      const lines = wrapBubbleText(bubble.text, 170);
+      const lineH = 15;
+      const padX = 10;
+      const padY = 8;
+      const textW = lines.reduce((max, line) => {
+        ctx.save();
+        ctx.font = '12px system-ui, -apple-system, sans-serif';
+        const w = ctx.measureText(line).width;
+        ctx.restore();
+        return Math.max(max, w);
+      }, 0);
+      const w = Math.min(190, Math.max(54, textW + padX * 2));
+      const h = lines.length * lineH + padY * 2;
+      const age = bubble.age;
+      const pop = easeOut(Math.min(1, age / 0.12));
+      const fade = age > bubble.life - 0.2
+        ? clamp((bubble.life - age) / 0.2, 0, 1)
+        : 1;
+      const alpha = Math.min(1, age / 0.08) * fade;
+      if (alpha <= 0.01) continue;
+
+      let below = false;
+      let boxTop = anchor.y - h - 8;
+      if (boxTop < topSafe) {
+        below = true;
+        boxTop = anchor.y + 14;
+      }
+      boxTop = clamp(boxTop, topSafe, bottomSafe - h);
+      const boxLeft = clamp(anchor.x - w / 2, 8, W - w - 8);
+      const cx = boxLeft + w / 2;
+      const cy = boxTop + h / 2;
+      const tailX = clamp(anchor.x, boxLeft + 12, boxLeft + w - 12);
+      const tailY = below ? boxTop : boxTop + h;
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(cx, cy);
+      ctx.rotate((f.facing || 1) * 0.012);
+      ctx.scale(pop, pop);
+      ctx.translate(-cx, -cy);
+
+      ctx.shadowColor = 'rgba(27, 26, 23, 0.16)';
+      ctx.shadowBlur = 6;
+      ctx.shadowOffsetY = 2;
+      ctx.beginPath();
+      ctx.moveTo(tailX - 5, tailY);
+      ctx.lineTo(anchor.x, anchor.y);
+      ctx.lineTo(tailX + 5, tailY);
+      ctx.closePath();
+      ctx.fillStyle = '#fffdf6';
+      ctx.fill();
+      ctx.strokeStyle = '#1b1a17';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetY = 0;
+      const rr = 7;
+      ctx.beginPath();
+      ctx.moveTo(boxLeft + rr, boxTop);
+      ctx.lineTo(boxLeft + w - rr, boxTop);
+      ctx.quadraticCurveTo(boxLeft + w, boxTop, boxLeft + w, boxTop + rr);
+      ctx.lineTo(boxLeft + w, boxTop + h - rr);
+      ctx.quadraticCurveTo(boxLeft + w, boxTop + h, boxLeft + w - rr, boxTop + h);
+      ctx.lineTo(boxLeft + rr, boxTop + h);
+      ctx.quadraticCurveTo(boxLeft, boxTop + h, boxLeft, boxTop + h - rr);
+      ctx.lineTo(boxLeft, boxTop + rr);
+      ctx.quadraticCurveTo(boxLeft, boxTop, boxLeft + rr, boxTop);
+      ctx.closePath();
+      ctx.fillStyle = '#fffdf6';
+      ctx.fill();
+      ctx.strokeStyle = '#1b1a17';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      ctx.fillStyle = '#1b1a17';
+      ctx.font = '12px system-ui, -apple-system, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      lines.forEach((line, i) => {
+        ctx.fillText(line, boxLeft + padX, boxTop + padY + i * lineH);
+      });
+      ctx.restore();
+    }
+  }
+
   function addFigure(x, y, color) {
     const f = new StickFigure(x, y, color);
     figures.push(f);
@@ -3089,6 +3555,8 @@ import { Level } from './level.js';
   }
 
   function beginPursuit(attacker, target) {
+    cancelChatFor(attacker);
+    cancelChatFor(target);
     for (const f of figures) if (f.pursuit) cancelPursuit(f);
     if (fightPick) {
       fightPick = null;
@@ -3281,6 +3749,16 @@ import { Level } from './level.js';
     addFigure(groundSpawnX(), level.groundY, colorPicker.value);
   });
 
+  if (autonChk) {
+    autonChk.addEventListener('change', () => {
+      if (!autonChk.checked) {
+        cancelChat();
+      } else {
+        chatCd = 8 + Math.random() * 7;
+      }
+    });
+  }
+
   colorPicker.addEventListener('input', () => {
     for (const f of selectionList()) f.color = colorPicker.value;
   });
@@ -3333,6 +3811,7 @@ import { Level } from './level.js';
   for (const btn of actionButtons) {
     btn.addEventListener('click', () => {
       if (!selected) return;
+      cancelChatFor(selected);
       if (btn.dataset.action === 'power') {
         if (selected.blown) return;
         if (fightPick) cancelFightPick();
@@ -3399,6 +3878,7 @@ import { Level } from './level.js';
       } else {
         if (fightPick) cancelFightPick();
         for (const f of selectionList()) {
+          cancelChatFor(f);
           if (f.pursuedBy) cancelPursuit(f.pursuedBy);
           if (f.pursuit) cancelPursuit(f);
           if (f.fighting) endDuel(f);
@@ -3531,6 +4011,7 @@ import { Level } from './level.js';
       }
       const group = selectionList();
       for (const f of group) {
+        cancelChatFor(f);
         if (f.pursuit) cancelPursuit(f);
         if (f.pursuedBy) cancelPursuit(f.pursuedBy);
       }
@@ -3633,6 +4114,8 @@ import { Level } from './level.js';
 
     if (dt > 0) {
       for (const f of figures) f.update(dt, level);
+      updateChat(dt);
+      updateBirds(dt);
       updateEffects(dt);
       updateSplats(dt);
     }
@@ -3646,6 +4129,11 @@ import { Level } from './level.js';
     updateCinematic(rdt);
     camera.update(rdt);
 
+    const stamp = utcStamp();
+    if (stamp !== celestialStamp) {
+      celestialStamp = stamp;
+      sceneDirty = true;
+    }
     if (sceneDirty) renderScene();
 
     ctx.save();
@@ -3655,6 +4143,7 @@ import { Level } from './level.js';
     camera.apply(ctx);
     ctx.drawImage(sceneCanvas, 0, 0, W, H);
 
+    drawBirds(ctx);
     drawSplats();
     for (const f of figures) f.drawShadow(ctx, level);
     for (const f of figures) f.draw(ctx);
@@ -3677,6 +4166,8 @@ import { Level } from './level.js';
     drawEffects();
 
     ctx.restore();
+
+    drawBubbles();
 
     if (shakeAmt > 0.4) {
       shakeAmt *= Math.pow(0.0005, rdt);

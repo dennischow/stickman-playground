@@ -12,6 +12,8 @@ Built with vanilla JavaScript and the Canvas 2D API, bundled with Vite. No game 
 - **Individual movement** — each figure gets its own walk/run speed, jump height, crouch timing, and landing rest, so a crowd never moves in lockstep.
 - **Motion polish** — smoothed frame-to-frame velocity drives subtle head, torso, and arm lag; landings squash and settle; footsteps kick up dust; fast strikes leave short smear arcs. All of it respects `prefers-reduced-motion`.
 - **Autonomous mode** — figures randomly switch actions on their own, each with a randomized "think" timer.
+- **Ambient chatter** — idle figures on the same floor occasionally face each other and trade a short speech-bubble exchange, with style-specific lines for Wing Chun, Muay Thai, and Brawler. Only one conversation runs at a time.
+- **Living sky** — the paper sky carries a sun and moon on a UTC 24-hour orbit, plus occasional drifting bird flocks. The celestial bodies fade near the horizon, and the birds thin out at night.
 - **Kung-fu combat** — AI duels with approach, block, dodge, punch, kick, combo, spin kick, sweep, uppercut, flying kick, stagger, knockdown, launch, and get-up states. Hits use natural recoil poses and knockdowns fall, settle, and push back up continuously.
 - **Fighting styles** — each figure can switch between Brawler, Wing Chun, and Muay Thai. Wing Chun uses a centerline guard, chain punches, low heel kicks, and a compact parry; Muay Thai uses teep, roundhouse, knee, and elbow. Styles change guard poses, attack timing and range, and AI distance preferences.
 - **Superpower** — grant a figure the power, then blast the nearest figure into the wall with knockback, slow-motion, impact typography, ink splats, and screen shake.
@@ -89,14 +91,14 @@ The game loop, rendering, physics, AI, and input live in [`src/main.js`](src/mai
 The `frame()` loop in [`src/main.js`](src/main.js) uses `requestAnimationFrame` with a delta capped at 50 ms to avoid huge jumps after tab switches. Each frame it:
 
 1. Scales the timestep for hit-stop or slow-motion.
-2. Advances figure physics, timed effects, and persistent splats.
+2. Advances figure physics, ambient chatter, bird flocks, timed effects, and persistent splats.
 3. Caches one pose per figure for the frame.
 4. Updates the cinematic framing target and damps the camera toward it.
-5. Repaints the cached scene only when it is dirty.
-6. Applies screen-space shake, then the camera transform, and draws the scene, ground splats, shadows, figures, marquee, and effects in world space.
-7. Restores the camera, applies the tinted flash overlay, and syncs the selection chip at ~10 Hz.
+5. Repaints the cached scene only when it is dirty or the UTC minute changes.
+6. Applies screen-space shake, then the camera transform, and draws the scene, birds, ground splats, shadows, figures, marquee, and effects in world space.
+7. Restores the camera, draws any screen-space speech bubbles, applies the tinted flash overlay, and syncs the selection chip at ~10 Hz.
 
-The scene is rendered once to an offscreen canvas on resize or scene change, so photo backgrounds cost nothing per frame.
+The scene is rendered once to an offscreen canvas on resize, scene change, or UTC minute change, so photo backgrounds cost almost nothing per frame.
 
 ### The stick figure model
 
@@ -122,6 +124,10 @@ ready → approach → punch / kick / combo / spinkick / sweep / uppercut / flyi
 
 Brawler keeps the original state set. Wing Chun and Muay Thai route their signature attacks through a shared `strike` state driven by the `STRIKES` table, so each move has its own wind-up, hit windows, range, knockback, and recovery. Wing Chun closes distance and favors chain punches, low kicks, and parries; Muay Thai uses teep and roundhouse at range and knee/elbow up close. Style is per figure, saved as `stickman.style`, and locked while a selected figure is dueling.
 
+### Ambient chatter
+
+When Autonomous is on, two idle figures on the same floor can strike up a short conversation. They stop, face each other, and take turns saying an opener and a reply in screen-space speech bubbles. Conversations require roughly 80–260 px of separation, avoid stairs, fights, chases, dragging, jumping, and blasts, and only one runs at a time. Dragging, combat, power, motion commands, and turning Autonomous off cancel the chat. Figures with the same fighting style occasionally use style-specific lines. Bubbles are drawn after the camera transform, so they stay upright and readable during cinematic zoom and rotation.
+
 ### Superpower
 
 `blastFigure()` pushes the caster back, resets the target, and puts it into a `blown` sequence: it flies across the screen, hits the wall with a burst and `BAM`/`WHAM` text, falls, lies down, then gets up. Blasts trigger brief slow-motion, a gold flash, an ink splat, and screen shake. During a chase, **Power** targets the chased figure specifically, giving the attacker a cross-floor ranged option.
@@ -129,6 +135,10 @@ Brawler keeps the original state set. Wing Chun and Muay Thai route their signat
 ### Scenes
 
 Scenes are declared in `SCENES` in [`src/main.js`](src/main.js). Photo images are preloaded, cover-scaled, desaturated with a canvas filter, and veiled with the paper color. The chosen scene is saved to `localStorage` under `stickman.scene`.
+
+### Sky and birds
+
+The sky uses UTC rather than local time: the sun and moon ride a 24-hour orbit, with the sun overhead at 12:00 UTC and the moon overhead at 00:00 UTC. Each body fades in and out near the horizon. On photo scenes the sky is drawn before the paper veil at reduced strength so it sits behind the photograph's atmosphere. The cached scene repaints when the UTC minute changes. Bird flocks of two to five drift across the upper sky every 25–45 seconds, less often at night, with simple ink silhouettes and a gentle wing flap. Reduced-motion mode lowers the flock size and calms the flap.
 
 ### Level and surfaces
 
