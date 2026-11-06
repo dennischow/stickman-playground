@@ -185,6 +185,12 @@
   body[data-cinematic="on"] #dock button[aria-pressed="true"]:hover:not(:disabled) {
     background: #fff; border-color: #fff;
   }
+  body[data-fight-pick="on"] canvas { cursor: crosshair; }
+  body[data-fight-pick="on"] #dock [data-action="fight"],
+  body[data-pursuit="on"] #dock [data-action="fight"] {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
   canvas { display: block; cursor: default; }
   #letterbox {
     position: fixed; inset: 0; z-index: 6; pointer-events: none;

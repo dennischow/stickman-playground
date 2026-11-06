@@ -42,6 +42,7 @@ import { Level } from './level.js';
   let selected = null;
   let drag = null;
   let marquee = null;
+  let fightPick = null;
   let lastPointer = null;
   const bg = '#f7f6f2';
 
@@ -319,6 +320,22 @@ import { Level } from './level.js';
       return;
     }
     cine.introT = 0;
+
+    if (fightPick) {
+      const list = [fightPick, ...fightTargetsFor(fightPick)];
+      const t = cinematicGroupTarget(list, 1.08, 520, 0, H * 0.55);
+      camera.follow = 5;
+      camera.setTarget(t.x, t.y, t.zoom, t.rotation);
+      return;
+    }
+
+    const chaser = figures.find(f => f.pursuit && f.pursuit.target);
+    if (chaser) {
+      const t = cinematicGroupTarget([chaser, chaser.pursuit.target], 1.12, 420, 0, H * 0.55);
+      camera.follow = 6;
+      camera.setTarget(t.x, t.y, t.zoom, t.rotation);
+      return;
+    }
 
     const fighters = figures.filter(f => f.fighting && !f.dragging);
     if (fighters.length) {
@@ -765,6 +782,9 @@ import { Level } from './level.js';
   }
 
   function startDuel(a, b) {
+    cancelPursuitsFor(a);
+    cancelPursuitsFor(b);
+    cancelFightPick();
     const floor = level.floorAt(a.x, a.y);
     a.combatFloor = floor;
     b.combatFloor = floor;
@@ -796,6 +816,9 @@ import { Level } from './level.js';
   }
 
   function blastFigure(caster, target, cd = 4) {
+    cancelPursuitsFor(caster);
+    cancelPursuitsFor(target);
+    cancelFightPick();
     const dir = target.x !== caster.x ? Math.sign(target.x - caster.x) : caster.facing;
     caster.powerCd = cd;
     caster.pushAnim = 0.45;
@@ -850,6 +873,9 @@ import { Level } from './level.js';
       this.fighting = false;
       this.foe = null;
       this.combatFloor = null;
+      this.pursuit = null;
+      this.pursuedBy = null;
+      this.fightTarget = false;
       this.trail = [];
       this.combat = {
         state: 'idle', t: 0, cd: 0.4 + Math.random() * 0.6,
@@ -927,6 +953,7 @@ import { Level } from './level.js';
 
     randomizeBehavior(dt, groundY) {
       if (this.dragging) return;
+      if (this.pursuit || this.pursuedBy) return;
       if (this.fighting) return;
       if (this.blown) return;
       if (!autonChk.checked) return;
@@ -960,6 +987,102 @@ import { Level } from './level.js';
         return this.combatFloor === 1 ? level.mezzY : level.groundY;
       }
       return level.surfaceAt(this.x, this.y);
+    }
+
+    _waitForChallenger(dt, level) {
+      const sy = pursuitSurfaceY(level, this.x, this.y);
+      if (this.y < sy) {
+        this.vy += 1500 * dt;
+        this.y += this.vy * dt;
+        if (this.y >= sy) {
+          this.y = sy;
+          this.vy = 0;
+        }
+      } else {
+        this.y = sy;
+        this.vy = 0;
+      }
+      this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 10));
+      this.behavior = 'idle';
+      this.facing = this.pursuedBy.x < this.x ? -1 : 1;
+      this.phase += dt * 1.6;
+    }
+
+    updatePursuit(dt, level) {
+      const p = this.pursuit;
+      if (!p) return;
+      const target = p.target;
+      if (!target || target.pursuedBy !== this || target.blown || target.dragging || target.fighting) {
+        cancelPursuit(this);
+        return;
+      }
+      p.t += dt;
+      if (p.t > Math.max(10, W / 200)) {
+        cancelPursuit(this);
+        flashStatus("Can't reach", 1600);
+        return;
+      }
+      const myFloor = pursuitFloor(level, this.x, this.y);
+      const targetFloor = pursuitFloor(level, target.x, target.y);
+      if (targetFloor < 0) {
+        cancelPursuit(this);
+        flashStatus('Target on stairs', 1400);
+        return;
+      }
+      if (p.drop) {
+        this.vy += 1500 * dt;
+        this.y += this.vy * dt;
+        const gy = level.surfaceAt(this.x, this.y + 8);
+        if (this.y >= gy) {
+          this.y = gy;
+          this.vy = 0;
+          p.drop = false;
+          this.landT = 0.4;
+          spawnDust(this.x, this.y, reduceMotion ? 3 : 6);
+          audio.land(panFor(this.x), false);
+        }
+        this.behavior = 'run';
+        this.phase += dt * 6;
+        return;
+      }
+      if (myFloor >= 0 && myFloor === targetFloor && Math.abs(target.x - this.x) <= 90) {
+        startDuel(this, target);
+        return;
+      }
+      let goalX;
+      if (myFloor === 1 && targetFloor === 0 && target.x >= level.mezzX0) {
+        goalX = level.mezzX1 + 24;
+      } else if (myFloor < 0) {
+        goalX = targetFloor === 1 ? level.stairX1 + 4 : level.stairX0 - 4;
+      } else if (myFloor !== targetFloor) {
+        goalX = myFloor === 0 ? level.stairX0 + 4 : level.stairX1 - 4;
+      } else {
+        goalX = target.x;
+      }
+      const dir = Math.sign(goalX - this.x) || this.facing;
+      this.facing = dir;
+      this.behavior = 'run';
+      this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 10));
+      this.x += dir * 200 * this.speedMul * dt;
+      this.x = clamp(this.x, 50, W - 50);
+      if (myFloor === 1 && targetFloor === 0 && target.x >= level.mezzX0 &&
+          (this.x >= level.mezzX1 || this.x >= W - 50 - 0.5)) {
+        this.x = Math.max(this.x, level.mezzX1 + 2);
+        p.drop = true;
+        this.vy = 0;
+        this.y = level.mezzY;
+        return;
+      }
+      this.y = pursuitSurfaceY(level, this.x, this.y);
+      this.vy = 0;
+      this.phase += dt * 200 * 0.085 * this.speedMul;
+      const stride = Math.PI * 2;
+      const stepIdx = Math.floor(this.phase / stride);
+      if (stepIdx !== this._stepPhase) {
+        this._stepPhase = stepIdx;
+        audio.step(panFor(this.x), true);
+        spawnStepDust(this.x, this.y, true, this.facing);
+      }
     }
 
     _trackMotion(dt, px, py) {
@@ -1120,6 +1243,15 @@ import { Level } from './level.js';
             }
           }
         }
+        return;
+      }
+
+      if (this.pursuit) {
+        this.updatePursuit(dt, level);
+        return;
+      }
+      if (this.pursuedBy) {
+        this._waitForChallenger(dt, level);
         return;
       }
 
@@ -2497,6 +2629,21 @@ import { Level } from './level.js';
         ctx.restore();
       }
 
+      if (this.fightTarget) {
+        const rr = headR + 19;
+        const ry = head.y - headR - 8;
+        const pulse = reduceMotion ? 0.8 : 0.55 + Math.sin(performance.now() / 170) * 0.2;
+        ctx.save();
+        ctx.globalAlpha = pulse;
+        ctx.beginPath();
+        ctx.arc(head.x, ry, rr, 0, Math.PI * 2);
+        ctx.strokeStyle = '#a86f00';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 4]);
+        ctx.stroke();
+        ctx.restore();
+      }
+
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.strokeStyle = this.color;
@@ -2634,6 +2781,102 @@ import { Level } from './level.js';
     return figures.filter(f => f.selected);
   }
 
+  function floorOf(f) {
+    return level.floorAt(f.x, f.y);
+  }
+
+  function pursuitSurfaceY(level, x, y) {
+    if (level.isOnStairs(x)) {
+      const rampY = level.stairsYAt(x);
+      if (Math.abs(rampY - y) <= 22) return rampY;
+    }
+    return level.surfaceAt(x, y + 8);
+  }
+
+  function pursuitFloor(level, x, y) {
+    if (level.isOnStairs(x) && Math.abs(y - level.stairsYAt(x)) <= 22) return -1;
+    if (x >= level.mezzX0 && x <= level.mezzX1 && Math.abs(y - level.mezzY) <= 10) return 1;
+    if (Math.abs(y - level.groundY) <= 10) return 0;
+    return -1;
+  }
+
+  function fightTargetsFor(f) {
+    const floor = floorOf(f);
+    if (floor < 0) return [];
+    return figures.filter(o =>
+      o !== f &&
+      f.isEnemy(o) &&
+      !o.fighting && !o.blown && !o.dragging &&
+      !o.pursuit && !o.pursuedBy &&
+      floorOf(o) >= 0
+    );
+  }
+
+  function stairsEnemiesFor(f) {
+    if (floorOf(f) < 0) return [];
+    return figures.filter(o =>
+      o !== f &&
+      f.isEnemy(o) &&
+      !o.fighting && !o.blown && !o.dragging &&
+      !o.pursuit && !o.pursuedBy &&
+      level.isOnStairs(o.x)
+    );
+  }
+
+  function fightTargetError(attacker, target) {
+    if (!attacker.isEnemy(target)) return 'Pick another color';
+    if (target.fighting) return 'Already fighting';
+    if (target.blown || target.dragging) return 'Unavailable';
+    if (target.pursuit || target.pursuedBy) return 'Already busy';
+    if (level.isOnStairs(target.x)) return 'Target on stairs';
+    return 'Pick another target';
+  }
+
+  function cancelPursuit(attacker) {
+    const p = attacker.pursuit;
+    if (!p) return;
+    attacker.pursuit = null;
+    if (attacker.behavior === 'run') attacker.setBehavior('idle');
+    const target = p.target;
+    if (target && target.pursuedBy === attacker) {
+      target.pursuedBy = null;
+      target.think = 1 + Math.random() * 2.5;
+    }
+  }
+
+  function cancelPursuitsFor(f) {
+    if (f.pursuit) cancelPursuit(f);
+    if (f.pursuedBy) cancelPursuit(f.pursuedBy);
+  }
+
+  function beginPursuit(attacker, target) {
+    for (const f of figures) if (f.pursuit) cancelPursuit(f);
+    if (fightPick) {
+      fightPick = null;
+      if (canvas.style.cursor === 'crosshair') canvas.style.cursor = 'default';
+    }
+    attacker.pursuit = { target, t: 0, drop: false };
+    target.pursuedBy = attacker;
+    target.setBehavior('idle');
+    target.think = 999;
+    attacker.setBehavior('run');
+    updateUI();
+  }
+
+  function beginFightPick(attacker) {
+    for (const f of figures) if (f.pursuit) cancelPursuit(f);
+    fightPick = attacker;
+    if (canvas) canvas.style.cursor = 'crosshair';
+    updateUI();
+  }
+
+  function cancelFightPick() {
+    if (!fightPick) return;
+    fightPick = null;
+    if (canvas && canvas.style.cursor === 'crosshair') canvas.style.cursor = 'default';
+    updateUI();
+  }
+
   function refreshPrimary() {
     for (const o of figures) o.primary = o === selected;
   }
@@ -2670,14 +2913,36 @@ import { Level } from './level.js';
     const multi = sel.length > 1;
     const compact = window.innerWidth <= 520;
     const narrow = window.innerWidth <= 360;
+    if (fightPick && (
+      fightPick !== selected ||
+      fightPick.fighting || fightPick.blown || fightPick.dragging ||
+      level.floorAt(fightPick.x, fightPick.y) < 0 ||
+      fightTargetsFor(fightPick).length === 0
+    )) {
+      fightPick = null;
+      if (canvas.style.cursor === 'crosshair') canvas.style.cursor = 'default';
+    }
+    const chaser = figures.find(f => f.pursuit);
+    if (chaser && chaser !== selected) cancelPursuit(chaser);
     document.body.dataset.selection = has ? 'some' : 'none';
+    document.body.dataset.fightPick = fightPick ? 'on' : 'off';
+    document.body.dataset.pursuit = figures.some(f => f.pursuit) ? 'on' : 'off';
     if (dock) dock.inert = !has;
     for (const btn of actionButtons) {
       btn.disabled = !has;
       let on = false;
       if (btn.dataset.action === 'fight') {
-        on = has && selected.fighting;
+        const armed = fightPick === selected;
+        const chasing = has && !!selected.pursuit;
+        on = has && (selected.fighting || armed || chasing);
         btn.disabled = !has || selected.blown;
+        btn.title = armed
+          ? 'Cancel target picking (Esc)'
+          : chasing
+            ? 'Cancel chase (Esc)'
+            : selected && selected.fighting
+              ? 'End duel (F)'
+              : 'Fight nearest enemy or pick one (F)';
       } else if (btn.dataset.action === 'power') {
         const holder = has && selected.hasPower;
         btn.disabled = !has || selected.blown || (holder && selected.powerCd > 0);
@@ -2686,7 +2951,7 @@ import { Level } from './level.js';
           ? (narrow ? 'Power' : 'Superpower')
           : (narrow ? 'Power' : 'Give Power');
         btn.title = holder
-          ? 'Blast the nearest figure into the wall (4s cooldown)'
+          ? 'Blast the nearest figure or your chase target (4s cooldown)'
           : 'Grant this figure the superpower';
       } else {
         on = has && sel.every(f => !f.fighting && f.behavior === btn.dataset.action);
@@ -2710,41 +2975,43 @@ import { Level } from './level.js';
     revokeBtn.hidden = !(has && selected.hasPower);
 
     const flashing = performance.now() < statusFlash.until;
-    if (!has) {
-      if (flashing) {
-        statusEl.textContent = statusFlash.text;
-        statusEl.title = statusFlash.text;
-      } else {
-        const text = figures.length
-          ? (compact ? 'Click a figure' : 'Click a figure to select')
-          : (compact ? 'Add a figure' : 'Add a figure to start');
-        statusEl.textContent = text;
-        statusEl.title = text;
-      }
-      colorPicker.disabled = true;
+    colorPicker.disabled = !has;
+    if (has) colorPicker.value = rgbToHex(selected.color);
+
+    if (flashing) {
+      statusEl.textContent = statusFlash.text;
+      statusEl.title = statusFlash.text;
+    } else if (fightPick) {
+      statusEl.textContent = compact ? 'Pick a target' : 'Pick an opponent';
+      statusEl.title = 'Pick an opponent · Esc to cancel';
+    } else if (has && selected.pursuit) {
+      const climbing = !selected.pursuit.drop && pursuitFloor(level, selected.x, selected.y) < 0;
+      statusEl.textContent = climbing
+        ? (compact ? 'Climbing' : 'Climbing…')
+        : (compact ? 'Chasing' : 'Chasing…');
+      statusEl.title = 'Chasing target · Esc to cancel';
+    } else if (!has) {
+      const text = figures.length
+        ? (compact ? 'Click a figure' : 'Click a figure to select')
+        : (compact ? 'Add a figure' : 'Add a figure to start');
+      statusEl.textContent = text;
+      statusEl.title = text;
     } else {
-      if (flashing) {
-        statusEl.textContent = statusFlash.text;
-        statusEl.title = statusFlash.text;
+      let mode;
+      if (sel.some(f => f.fighting)) {
+        mode = sel.every(f => f.fighting) ? 'dueling' : 'mixed';
       } else {
-        let mode;
-        if (sel.some(f => f.fighting)) {
-          mode = sel.every(f => f.fighting) ? 'dueling' : 'mixed';
-        } else {
-          const behaviors = new Set(sel.map(f => f.behavior));
-          mode = behaviors.size === 1 ? sel[0].behavior : 'mixed';
-        }
-        const suffix = sel.some(f => f.dragging) ? ' · drag' : '';
-        const fullText = multi
-          ? `${sel.length} selected · ${mode}${suffix}`
-          : `Selected · ${mode}${suffix}`;
-        statusEl.textContent = compact
-          ? (multi ? `${sel.length} selected` : `${mode}${suffix}`)
-          : fullText;
-        statusEl.title = fullText;
+        const behaviors = new Set(sel.map(f => f.behavior));
+        mode = behaviors.size === 1 ? sel[0].behavior : 'mixed';
       }
-      colorPicker.disabled = false;
-      colorPicker.value = rgbToHex(selected.color);
+      const suffix = sel.some(f => f.dragging) ? ' · drag' : '';
+      const fullText = multi
+        ? `${sel.length} selected · ${mode}${suffix}`
+        : `Selected · ${mode}${suffix}`;
+      statusEl.textContent = compact
+        ? (multi ? `${sel.length} selected` : `${mode}${suffix}`)
+        : fullText;
+      statusEl.title = fullText;
     }
   }
 
@@ -2800,6 +3067,7 @@ import { Level } from './level.js';
       if (!selected) return;
       if (btn.dataset.action === 'power') {
         if (selected.blown) return;
+        if (fightPick) cancelFightPick();
         if (!selected.hasPower) {
           selected.hasPower = true;
           audio.charge(panFor(selected.x));
@@ -2807,11 +3075,19 @@ import { Level } from './level.js';
         } else if (selected.powerCd > 0) {
           flashStatus('Recharging');
         } else {
-          let target = null, best = Infinity;
-          for (const f of figures) {
-            if (f === selected || f.selected || f.dragging || f.blown) continue;
-            const d = Math.abs(f.x - selected.x);
-            if (d < best) { best = d; target = f; }
+          let target = null;
+          if (selected.pursuit) {
+            const ct = selected.pursuit.target;
+            if (ct && !ct.blown && !ct.dragging) target = ct;
+            else cancelPursuit(selected);
+          }
+          if (!target) {
+            let best = Infinity;
+            for (const f of figures) {
+              if (f === selected || f.selected || f.dragging || f.blown) continue;
+              const d = Math.abs(f.x - selected.x);
+              if (d < best) { best = d; target = f; }
+            }
           }
           if (!target) {
             flashStatus('No target');
@@ -2820,6 +3096,15 @@ import { Level } from './level.js';
           }
         }
       } else if (btn.dataset.action === 'fight') {
+        if (fightPick) {
+          cancelFightPick();
+          return;
+        }
+        if (selected.pursuit) {
+          cancelPursuit(selected);
+          updateUI();
+          return;
+        }
         if (selected.fighting) {
           endDuel(selected);
         } else {
@@ -2828,23 +3113,26 @@ import { Level } from './level.js';
             flashStatus('Pick a floor', 1800);
             return;
           }
-          const enemies = figures.filter(f =>
-            f !== selected && selected.isEnemy(f) && !f.fighting && !f.blown && !f.dragging &&
-            level.floorAt(f.x, f.y) === selectedFloor);
+          const enemies = fightTargetsFor(selected);
           if (!enemies.length) {
-            flashStatus('No enemy', 2200);
+            if (stairsEnemiesFor(selected).length) flashStatus('Target on stairs', 1800);
+            else flashStatus('No enemy', 2200);
             return;
           }
-          let nearest = enemies[0];
-          let best = Math.abs(nearest.x - selected.x);
-          for (const e of enemies) {
-            const d = Math.abs(e.x - selected.x);
-            if (d < best) { best = d; nearest = e; }
+          if (enemies.length === 1) {
+            const target = enemies[0];
+            if (level.floorAt(target.x, target.y) === selectedFloor) startDuel(selected, target);
+            else beginPursuit(selected, target);
+            return;
           }
-          startDuel(selected, nearest);
+          beginFightPick(selected);
+          return;
         }
       } else {
+        if (fightPick) cancelFightPick();
         for (const f of selectionList()) {
+          if (f.pursuedBy) cancelPursuit(f.pursuedBy);
+          if (f.pursuit) cancelPursuit(f);
           if (f.fighting) endDuel(f);
           f.setBehavior(btn.dataset.action);
           f.think = 4 + Math.random() * 4;
@@ -2871,6 +3159,20 @@ import { Level } from './level.js';
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
     const key = e.key.toLowerCase();
+    if (key === 'escape') {
+      if (fightPick) {
+        e.preventDefault();
+        cancelFightPick();
+        return;
+      }
+      const chaser = figures.find(f => f.pursuit);
+      if (chaser) {
+        e.preventDefault();
+        cancelPursuit(chaser);
+        updateUI();
+        return;
+      }
+    }
     if (key === 'm') {
       e.preventDefault();
       audio.unlock();
@@ -2913,6 +3215,31 @@ import { Level } from './level.js';
   canvas.addEventListener('pointerdown', e => {
     const { x, y } = pointerPos(e);
     lastPointer = { x, y };
+    if (fightPick) {
+      let hitTarget = null;
+      for (let i = figures.length - 1; i >= 0; i--) {
+        if (figures[i].hit(x, y)) { hitTarget = figures[i]; break; }
+      }
+      if (!hitTarget || hitTarget === fightPick) {
+        cancelFightPick();
+        return;
+      }
+      const attacker = fightPick;
+      if (fightTargetsFor(attacker).includes(hitTarget)) {
+        const af = level.floorAt(attacker.x, attacker.y);
+        if (af < 0) {
+          cancelFightPick();
+          flashStatus('Pick a floor', 1600);
+          return;
+        }
+        cancelFightPick();
+        if (level.floorAt(hitTarget.x, hitTarget.y) === af) startDuel(attacker, hitTarget);
+        else beginPursuit(attacker, hitTarget);
+      } else {
+        flashStatus(fightTargetError(attacker, hitTarget), 1600);
+      }
+      return;
+    }
     const additive = e.shiftKey || e.metaKey || e.ctrlKey;
     let hitFig = null;
     for (let i = figures.length - 1; i >= 0; i--) {
@@ -2935,6 +3262,10 @@ import { Level } from './level.js';
         updateUI();
       }
       const group = selectionList();
+      for (const f of group) {
+        if (f.pursuit) cancelPursuit(f);
+        if (f.pursuedBy) cancelPursuit(f.pursuedBy);
+      }
       for (const f of group) f.dragging = true;
       drag = { moved: false, sx: x, sy: y, items: group.map(f => ({ f, x: f.x, y: f.y })) };
       canvas.setPointerCapture(e.pointerId);
@@ -2965,6 +3296,10 @@ import { Level } from './level.js';
       marquee.x1 = x;
       marquee.y1 = y;
       if (Math.abs(x - marquee.x0) > 3 || Math.abs(y - marquee.y0) > 3) marquee.moved = true;
+      return;
+    }
+    if (fightPick) {
+      canvas.style.cursor = 'crosshair';
       return;
     }
     let hovering = false;
@@ -3035,6 +3370,10 @@ import { Level } from './level.js';
     }
 
     for (const f of figures) f._renderPose = f.pose();
+    const pickTargets = fightPick ? new Set(fightTargetsFor(fightPick)) : null;
+    for (const f of figures) {
+      f.fightTarget = !!(f.pursuedBy || (pickTargets && pickTargets.has(f)));
+    }
 
     updateCinematic(rdt);
     camera.update(rdt);

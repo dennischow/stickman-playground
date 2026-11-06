@@ -17,7 +17,7 @@ Built with vanilla JavaScript and the Canvas 2D API, bundled with Vite. No game 
 - **Comic impact feel** — sprite-based dust and ink, persistent ground splats, starbursts, manga sound-effect words (`BAM`, `WHACK`, `K.O.`, `BOOM`), tinted flashes, and hit-stop.
 - **Synthesized audio** — a small WebAudio engine generates whooshes, impacts, footsteps, jumps, landings, blasts, and K.O. sounds. No audio files, with stereo panning by on-screen position and a persisted mute setting.
 - **Cinematic camera** — a damped camera adds gentle idle framing, duel intro push-in, fight follow, K.O. focus, and blast tracking, with letterbox bars and a persisted toggle. Pointer input is inverse-transformed, so selection and dragging stay accurate while the camera moves.
-- **Multi-level stage** — a paper/ink mezzanine and staircase give the playground vertical space: figures climb stairs, jump between floors, fall off edges, and can be dragged onto either level. Duels stay on the same floor.
+- **Multi-level stage** — a paper/ink mezzanine and staircase give the playground vertical space: figures climb stairs, jump between floors, fall off edges, and can be dragged onto either level. Duels lock to one floor once they start; challenging someone across floors sends the attacker up or down the stairs — or off the mezzanine edge — first.
 - **Six scenes** — blank paper plus five photo backgrounds (lake, factory, bridge, highway, floating island), desaturated behind a paper veil. The selection persists via `localStorage`.
 - **Selection & dragging** — click, shift/meta/ctrl-click to multi-select, drag to move a group, or marquee box-select.
 - **Keyboard shortcuts** — `1–5` for motion, `F` fight, `P` power, `R` revoke, `A` add, `M` mute, `C` cinematic.
@@ -62,7 +62,8 @@ npm run check     # syntax-check the JavaScript modules
 | `3` | Walk |
 | `4` | Run |
 | `5` | Jump |
-| `F` | Fight the nearest enemy / end the current duel |
+| `F` | Fight the nearest enemy, pick a target, or cancel a chase / end the current duel |
+| `Esc` | Cancel target picking or a chase |
 | `P` | Grant or use the superpower |
 | `R` | Revoke the superpower |
 | `M` | Mute or unmute sound |
@@ -75,7 +76,7 @@ The top bar holds the always-relevant controls: **Add**, **Autonomous**, **Scene
 Selection actions live in a floating dock at the bottom of the screen. It appears whenever a figure is selected and sits inside the cinematic letterbox bar when cinematic mode is on:
 
 - **Motion** — set the selection to Idle, Crawl, Walk, Run, or Jump.
-- **Combat** — start/stop a duel and grant or use the superpower.
+- **Combat** — start/stop a duel, pick among several enemies, chase someone on another floor, and grant or use the superpower.
 
 ## How It Works
 
@@ -107,7 +108,7 @@ Frame-to-frame position changes are smoothed into per-figure velocity and accele
 
 ### Combat state machine
 
-When two figures of different colors fight on the same floor, `startDuel()` locks them to that floor and points them at each other. The fight button only pairs enemies on the selected figure's floor, and knockback stays inside that floor's bounds. `updateFight()` runs a per-figure state machine:
+When two figures of different colors fight, `startDuel()` locks them to the attacker's floor and points them at each other; knockback stays inside that floor's bounds. Enemies on other floors are still valid targets: pressing **Fight** starts a single active chase, and the attacker runs to the staircase (or the nearest mezzanine edge), climbs, descends, or drops, and closes in while the target waits and faces them. A chase cancels after a few seconds with `Can't reach`, on `Esc`/`F`, when either figure is dragged or blasted, or when the selection changes. `updateFight()` runs a per-figure state machine:
 
 ```
 ready → approach → punch / kick / combo / spinkick / sweep / uppercut / flyingkick
@@ -119,7 +120,7 @@ ready → approach → punch / kick / combo / spinkick / sweep / uppercut / flyi
 
 ### Superpower
 
-`blastFigure()` pushes the caster back, resets the target, and puts it into a `blown` sequence: it flies across the screen, hits the wall with a burst and `BAM`/`WHAM` text, falls, lies down, then gets up. Blasts trigger brief slow-motion, a gold flash, an ink splat, and screen shake.
+`blastFigure()` pushes the caster back, resets the target, and puts it into a `blown` sequence: it flies across the screen, hits the wall with a burst and `BAM`/`WHAM` text, falls, lies down, then gets up. Blasts trigger brief slow-motion, a gold flash, an ink splat, and screen shake. During a chase, **Power** targets the chased figure specifically, giving the attacker a cross-floor ranged option.
 
 ### Scenes
 
@@ -138,6 +139,7 @@ Figures query the level every frame instead of using a fixed ground line. Walkin
 - **Idle** — selected figures, or all figures when nothing is selected.
 - **Duel intro** — a short push-in on both fighters.
 - **Fight follow** — keeps both active fighters in frame.
+- **Target picking / chase** — frames the attacker together with every valid target, then follows the chase pair across the stairs.
 - **K.O. focus** — pushes in on a knocked-down figure.
 - **Blast focus** — tracks from the caster toward the target.
 
