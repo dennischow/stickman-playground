@@ -95,8 +95,8 @@
   #removeBtn svg { width: 13px; height: 13px; display: block; }
   #removeBtn:hover:not(:disabled) { background: rgba(178, 58, 47, 0.12); color: #a12a22; }
   #removeBtn[hidden] { display: none; }
-  button[data-action="power"] { position: relative; overflow: hidden; }
-  button[data-action="power"]::after {
+  button[data-action="blast"] { position: relative; overflow: hidden; }
+  button[data-action="blast"]::after {
     content: ''; position: absolute; left: 0; bottom: 0; height: 2px;
     width: calc(var(--cd, 0) * 100%); background: var(--accent);
   }

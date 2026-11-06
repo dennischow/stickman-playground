@@ -8,7 +8,7 @@ import { Level } from './level.js';
   const addBtn = document.getElementById('addBtn');
   const colorPicker = document.getElementById('colorPicker');
   const actionButtons = [...document.querySelectorAll('#toolbar [data-action], #dock [data-action]')];
-  const powerBtn = actionButtons.find(b => b.dataset.action === 'power');
+  const blastBtn = actionButtons.find(b => b.dataset.action === 'blast');
   const statusEl = document.getElementById('readoutText');
   const powerGlyph = document.getElementById('powerGlyph');
   const revokeBtn = document.getElementById('revokeBtn');
@@ -1388,6 +1388,54 @@ import { Level } from './level.js';
     }
     cineBlast(caster, target);
     flashStatus('Blast!', 1000);
+  }
+
+  function revokePower(f) {
+    if (!f || !f.hasPower) return;
+    f.hasPower = false;
+    f.powerCd = 0;
+    flashStatus('Power off', 1600);
+    updateUI();
+  }
+
+  function togglePower(f) {
+    if (!f || f.blown || f.dying) return;
+    if (f.hasPower) {
+      revokePower(f);
+      return;
+    }
+    f.hasPower = true;
+    audio.charge(panFor(f.x));
+    flashStatus('Power on', 2200);
+    updateUI();
+  }
+
+  function usePower(f) {
+    if (!f || f.blown || f.dying || !f.hasPower) return;
+    if (f.powerCd > 0) {
+      flashStatus('Recharging');
+      return;
+    }
+    if (fightPick) cancelFightPick();
+    let target = null;
+    if (f.pursuit) {
+      const ct = f.pursuit.target;
+      if (ct && !ct.blown && !ct.dragging && !ct.dying) target = ct;
+      else cancelPursuit(f);
+    }
+    if (!target) {
+      let best = Infinity;
+      for (const o of figures) {
+        if (o === f || o.selected || o.dragging || o.blown || o.dying) continue;
+        const d = Math.abs(o.x - f.x);
+        if (d < best) { best = d; target = o; }
+      }
+    }
+    if (!target) {
+      flashStatus('No target');
+    } else {
+      blastFigure(f, target, 4);
+    }
   }
 
   class StickFigure {
@@ -4252,24 +4300,35 @@ import { Level } from './level.js';
               : 'Fight nearest enemy or pick one (F)';
       } else if (btn.dataset.action === 'power') {
         const holder = has && selected.hasPower;
-        btn.disabled = !has || selected.blown || (holder && selected.powerCd > 0);
+        btn.disabled = !has || selected.blown || selected.dying;
         on = holder;
         btn.textContent = holder
-          ? (narrow ? 'Power' : 'Superpower')
+          ? (narrow ? 'Remove' : 'Remove Power')
           : (narrow ? 'Power' : 'Give Power');
         btn.title = holder
-          ? 'Blast the nearest figure or your chase target (4s cooldown)'
-          : 'Grant this figure the superpower';
+          ? 'Remove the superpower (P)'
+          : 'Grant this figure the superpower (P)';
+      } else if (btn.dataset.action === 'blast') {
+        const holder = has && selected.hasPower;
+        btn.disabled = !holder || selected.blown || selected.dying || selected.powerCd > 0;
+        btn.textContent = holder && selected.powerCd > 0
+          ? (narrow ? '...' : 'Recharging')
+          : 'Blast';
+        btn.title = !holder
+          ? 'Give this figure the superpower first'
+          : selected.powerCd > 0
+            ? 'Superpower recharging'
+            : 'Blast the nearest figure or your chase target (B)';
       } else {
         on = has && sel.every(f => !f.fighting && f.behavior === btn.dataset.action);
       }
       btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     }
 
-    if (powerBtn) {
+    if (blastBtn) {
       const cd = has && selected.hasPower && selected.powerCd > 0
         ? Math.min(1, selected.powerCd / 4) : 0;
-      powerBtn.style.setProperty('--cd', cd.toFixed(3));
+      blastBtn.style.setProperty('--cd', cd.toFixed(3));
     }
 
     powerGlyph.className = '';
@@ -4414,35 +4473,9 @@ import { Level } from './level.js';
       cancelChatFor(selected);
       cancelSpectating(selected);
       if (btn.dataset.action === 'power') {
-        if (selected.blown) return;
-        if (fightPick) cancelFightPick();
-        if (!selected.hasPower) {
-          selected.hasPower = true;
-          audio.charge(panFor(selected.x));
-          flashStatus('Power on', 2200);
-        } else if (selected.powerCd > 0) {
-          flashStatus('Recharging');
-        } else {
-          let target = null;
-          if (selected.pursuit) {
-            const ct = selected.pursuit.target;
-            if (ct && !ct.blown && !ct.dragging) target = ct;
-            else cancelPursuit(selected);
-          }
-          if (!target) {
-            let best = Infinity;
-            for (const f of figures) {
-              if (f === selected || f.selected || f.dragging || f.blown || f.dying) continue;
-              const d = Math.abs(f.x - selected.x);
-              if (d < best) { best = d; target = f; }
-            }
-          }
-          if (!target) {
-            flashStatus('No target');
-          } else {
-            blastFigure(selected, target, 4);
-          }
-        }
+        togglePower(selected);
+      } else if (btn.dataset.action === 'blast') {
+        usePower(selected);
       } else if (btn.dataset.action === 'fight') {
         if (fightPick) {
           cancelFightPick();
@@ -4494,17 +4527,14 @@ import { Level } from './level.js';
 
   revokeBtn.addEventListener('click', () => {
     if (!selected || !selected.hasPower) return;
-    selected.hasPower = false;
-    selected.powerCd = 0;
-    flashStatus('Power off', 1600);
-    updateUI();
+    revokePower(selected);
   });
 
   removeBtn.addEventListener('click', removeSelectedFigures);
 
   const KEY_ACTIONS = {
     '1': 'idle', '2': 'crawl', '3': 'walk', '4': 'run', '5': 'jump',
-    f: 'fight', p: 'power',
+    f: 'fight', p: 'power', b: 'blast',
   };
   document.addEventListener('keydown', e => {
     if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -4799,7 +4829,7 @@ import { Level } from './level.js';
     }
 
     if (selected && selected.hasPower && selected.powerCd > 0) {
-      powerBtn.style.setProperty('--cd', Math.min(1, selected.powerCd / 4).toFixed(3));
+      blastBtn.style.setProperty('--cd', Math.min(1, selected.powerCd / 4).toFixed(3));
     }
     if (now - lastUITime >= 100) {
       updateUI();

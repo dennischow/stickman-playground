@@ -18,7 +18,7 @@ Built with vanilla JavaScript and the Canvas 2D API, bundled with Vite. No game 
 - **Kung-fu combat** — AI duels with approach, block, dodge, punch, kick, combo, spin kick, sweep, uppercut, flying kick, stagger, knockdown, launch, and get-up states. Hits use natural recoil poses and knockdowns fall, settle, and push back up continuously.
 - **Health and defeat** — fighters carry a small health bar above their heads; blocks and dodges avoid damage, and a fighter at zero HP falls, lies for two seconds, rises like an angel with a halo and wings, fades out, and is removed.
 - **Fighting styles** — each figure can switch between Brawler, Wing Chun, and Muay Thai. Wing Chun uses a centerline guard, chain punches, low heel kicks, and a compact parry; Muay Thai uses teep, roundhouse, knee, and elbow. Styles change guard poses, attack timing and range, and AI distance preferences.
-- **Superpower** — grant a figure the power, then blast the nearest figure into the wall with knockback, slow-motion, impact typography, ink splats, and screen shake. Blasting a fighter also takes 20 HP off their health bar.
+- **Superpower** — give a figure the power with a toggle, then blast the nearest figure into the wall with knockback, slow-motion, impact typography, ink splats, and screen shake. Blasting a fighter also takes 20 HP off their health bar. Toggle the power off at any time, or press `R`.
 - **Comic impact feel** — sprite-based dust and ink, persistent ground splats, starbursts, manga sound-effect words (`BAM`, `WHACK`, `K.O.`, `BOOM`), tinted flashes, and hit-stop.
 - **Synthesized audio** — a small WebAudio engine generates whooshes, impacts, footsteps, jumps, landings, blasts, and K.O. sounds. No audio files, with stereo panning by on-screen position and a persisted mute setting.
 - **Cinematic camera** — a damped camera adds gentle idle framing, duel intro push-in, fight follow, K.O. focus, death rise, and blast tracking, with letterbox bars and a persisted toggle. Pointer input is inverse-transformed, so selection and dragging stay accurate while the camera moves.
@@ -26,7 +26,7 @@ Built with vanilla JavaScript and the Canvas 2D API, bundled with Vite. No game 
 - **Six scenes** — blank paper plus five photo backgrounds (lake, factory, bridge, highway, floating island), desaturated behind a paper veil. The selection persists via `localStorage`.
 - **Selection & dragging** — click, shift/meta/ctrl-click to multi-select, drag to move a group, or marquee box-select.
 - **Remove figures** — select one or more figures and use the trash button in the selection chip, or press `Delete` / `Backspace`, to remove them. The playground can be emptied and Add still works.
-- **Keyboard shortcuts** — `1–5` for motion, `F` fight, `P` power, `R` revoke, `A` add, `M` mute, `C` cinematic, `Delete` remove selection.
+- **Keyboard shortcuts** — `1–5` for motion, `F` fight, `P` toggle power, `B` blast, `R` revoke, `A` add, `M` mute, `C` cinematic, `Delete` remove selection.
 - **Responsive, accessible UI** — the top bar and contextual action dock adapt to narrow screens, buttons expose `aria-pressed`, and `prefers-reduced-motion` trims particles, flashes, slow-motion, and camera motion while CSS disables transitions and grain animation.
 
 ## Getting Started
@@ -70,7 +70,8 @@ npm run check     # syntax-check the JavaScript modules
 | `5` | Jump |
 | `F` | Fight the nearest enemy, pick a target, or cancel a chase / end the current duel |
 | `Esc` | Cancel target picking or a chase |
-| `P` | Grant or use the superpower |
+| `P` | Toggle the superpower on or off |
+| `B` | Blast with the superpower |
 | `R` | Revoke the superpower |
 | `M` | Mute or unmute sound |
 | `C` | Toggle the cinematic camera and letterbox |
@@ -83,7 +84,7 @@ The top bar holds the always-relevant controls: **Add**, **Autonomous**, **Scene
 Selection actions live in a floating dock at the bottom of the screen. It appears whenever a figure is selected and sits inside the cinematic letterbox bar when cinematic mode is on:
 
 - **Motion** — set the selection to Idle, Crawl, Walk, Run, or Jump.
-- **Combat** — start/stop a duel, pick among several enemies, chase someone on another floor, and grant or use the superpower.
+- **Combat** — start/stop a duel, pick among several enemies, chase someone on another floor, toggle the superpower on or off, and blast with it.
 - **Style** — choose Brawler, Wing Chun, or Muay Thai for the selection. Mixed selections show **Mixed**, the selector locks during a duel, and new figures inherit the last chosen style.
 
 ## How It Works
@@ -140,7 +141,7 @@ When a duel starts and Autonomous is on, up to two bystanders on the same floor 
 
 ### Superpower
 
-`blastFigure()` pushes the caster back, resets the target, and puts it into a `blown` sequence: it flies across the screen, hits the wall with a burst and `BAM`/`WHAM` text, falls, lies down, then gets up. Blasts trigger brief slow-motion, a gold flash, an ink splat, and screen shake. Blasting a fighter also subtracts 20 HP; if that empties the bar, the target dies instead of being blown. During a chase, **Power** targets the chased figure specifically, giving the attacker a cross-floor ranged option.
+`blastFigure()` pushes the caster back, resets the target, and puts it into a `blown` sequence: it flies across the screen, hits the wall with a burst and `BAM`/`WHAM` text, falls, lies down, then gets up. Blasts trigger brief slow-motion, a gold flash, an ink splat, and screen shake. Blasting a fighter also subtracts 20 HP; if that empties the bar, the target dies instead of being blown. The dock's **Give Power** button is a toggle: once the figure has the power it becomes **Remove Power**, and **Blast** becomes available. `P` toggles the power, `B` blasts, and `R` revokes it. During a chase, **Blast** targets the chased figure specifically, giving the attacker a cross-floor ranged option.
 
 ### Scenes
 
