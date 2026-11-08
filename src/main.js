@@ -1,12 +1,21 @@
 import { audio } from './audio.js';
 import { Camera } from './camera.js';
 import { Level } from './level.js';
+import {
+  GRAVITY, WALK_SPEED, RUN_SPEED, EDGE_MARGIN,
+  STRIDE_WALK, STRIDE_RUN,
+  clamp, lerp, smoothstep, easeOut, pick
+} from './constants.js';
+import { readStorage, writeStorage } from './storage.js';
 
 (() => {
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
   const addBtn = document.getElementById('addBtn');
   const colorPicker = document.getElementById('colorPicker');
+  const paletteBtn = document.getElementById('paletteBtn');
+  const palettePanel = document.getElementById('palettePanel');
+  const paletteSwatches = [...document.querySelectorAll('.palette-swatch')];
   const actionButtons = [...document.querySelectorAll('#toolbar [data-action], #dock [data-action]')];
   const blastBtn = actionButtons.find(b => b.dataset.action === 'blast');
   const statusEl = document.getElementById('readoutText');
@@ -24,14 +33,25 @@ import { Level } from './level.js';
   function flashStatus(text, ms = 1800) {
     statusFlash = { text, until: performance.now() + ms };
   }
+  let lastStatusText = '';
+  let lastStatusTitle = '';
+  let lastBlastCd = '';
+  function setStatus(text, title = text) {
+    if (text !== lastStatusText) {
+      statusEl.textContent = text;
+      lastStatusText = text;
+    }
+    if (title !== lastStatusTitle) {
+      statusEl.title = title;
+      lastStatusTitle = title;
+    }
+  }
 
   let W = 0, H = 0, DPR = 1;
   const camera = new Camera();
   const level = new Level();
   let cinematicOn = true;
-  try {
-    if (localStorage.getItem('stickman.cinematic') === '0') cinematicOn = false;
-  } catch (err) {}
+  if (readStorage('stickman.cinematic') === '0') cinematicOn = false;
   const cine = {
     introT: 0, introA: null, introB: null,
     koT: 0, koFig: null,
@@ -51,13 +71,21 @@ import { Level } from './level.js';
   const STYLES = {
     brawler: 'Brawler',
     wingchun: 'Wing Chun',
-    muaythai: 'Muay Thai'
+    muaythai: 'Muay Thai',
+    mma: 'MMA',
+    shaolin: 'Shaolin'
+  };
+  const STYLE_COMBAT = {
+    wingchun: { defend: 0.085, block: 0.72, blockT: 0.3, recoverMin: 0.16, recoverJitter: 0.18 },
+    muaythai: { defend: 0.06, block: 0.52, blockT: 0.45, recoverMin: 0.35, recoverJitter: 0.35 },
+    mma: { defend: 0.07, block: 0.6, blockT: 0.4, recoverMin: 0.28, recoverJitter: 0.3 },
+    shaolin: { defend: 0.075, block: 0.6, blockT: 0.38, recoverMin: 0.28, recoverJitter: 0.3 },
+    brawler: { defend: 0.06, block: 0.45, blockT: 0.45, recoverMin: 0.35, recoverJitter: 0.35 }
   };
   let lastStyle = 'brawler';
-  try {
-    const savedStyle = localStorage.getItem('stickman.style');
-    if (savedStyle && STYLES[savedStyle]) lastStyle = savedStyle;
-  } catch (err) {}
+  const savedStyle = readStorage('stickman.style');
+  if (savedStyle === 'jkd') lastStyle = 'mma';
+  else if (savedStyle && STYLES[savedStyle]) lastStyle = savedStyle;
 
   const STRIKES = {
     chainpunch: {
@@ -73,6 +101,21 @@ import { Level } from './level.js';
       total: 0.42, lungeEnd: 0.12, lungeSpeed: 70, range: 100,
       hits: [{ at: 0.18, kbx: 140, damage: 9, kdChance: 0.12, freeze: 0.05, shake: 6, starScale: 1.05 }],
       cd: 0.40, cdJitter: 0.15
+    },
+    highkick: {
+      total: 0.78, lungeEnd: 0.20, lungeSpeed: 460, range: 170,
+      aim: 'head',
+      leap: { at: 0.14, vy: -300, min: 120, max: 260, gap: 40 },
+      hits: [{ at: 0.33, kbx: 300, damage: 18, kdChance: 0.45, freeze: 0.09, shake: 12, starScale: 1.5 }],
+      cd: 1.10, cdJitter: 0.2
+    },
+    burst: {
+      total: 0.72, lungeEnd: 0.14, lungeSpeed: 0, range: 125,
+      aim: 'head',
+      hop: { dur: 0.14, dist: 14 },
+      dash: { from: 0.14, to: 0.34, speed: 520, stopGap: 58 },
+      hits: [{ at: 0.36, kbx: 180, damage: 14.5, kdChance: 0.22, freeze: 0.08, shake: 10, starScale: 1.3 }],
+      cd: 1.20, cdJitter: 0.2
     },
     teep: {
       total: 0.55, lungeEnd: 0.16, lungeSpeed: 80, range: 140,
@@ -93,8 +136,42 @@ import { Level } from './level.js';
       total: 0.36, lungeEnd: 0.10, lungeSpeed: 55, range: 78,
       hits: [{ at: 0.13, kbx: 180, damage: 12, kdChance: 0.18, freeze: 0.06, shake: 7, starScale: 1.0 }],
       cd: 0.40, cdJitter: 0.15
+    },
+    superman: {
+      total: 0.70, lungeEnd: 0.08, lungeSpeed: 80, range: 175,
+      leap: { at: 0.12, vy: -200, min: 70, max: 200 },
+      fx: 'superman',
+      hits: [{ at: 0.30, kbx: 250, damage: 15, kdChance: 0.35, freeze: 0.08, shake: 10, starScale: 1.3 }],
+      cd: 1.40, cdJitter: 0.2
+    },
+    flyknee: {
+      total: 0.8, lungeEnd: 0.12, lungeSpeed: 100, range: 140,
+      leap: { at: 0.10, vy: -420, min: 190, max: 560 },
+      hits: [{ at: 0.27, kbx: 280, damage: 17, kdChance: 0.4, freeze: 0.08, shake: 11, starScale: 1.4 }],
+      cd: 1.05, cdJitter: 0.2
+    },
+    overhand: {
+      total: 0.55, lungeEnd: 0.18, lungeSpeed: 120, range: 110,
+      hits: [{ at: 0.20, kbx: 240, damage: 13, kdChance: 0.28, freeze: 0.07, shake: 9, starScale: 1.25 }],
+      cd: 0.65, cdJitter: 0.15
     }
   };
+
+  const FLURRY_MOVES = [
+    { kind: 'jab', side: 'lead', at: 0.08, damage: 2.2, kbx: 8, aim: 'head' },
+    { kind: 'cross', side: 'rear', at: 0.20, damage: 2.8, kbx: 10, aim: 'body' },
+    { kind: 'hook', side: 'lead', at: 0.32, damage: 2.8, kbx: 10, aim: 'head' },
+    { kind: 'body', side: 'rear', at: 0.44, damage: 3.2, kbx: 9, aim: 'body' },
+    { kind: 'uppercut', side: 'lead', at: 0.56, damage: 3.4, kbx: 11, aim: 'head' },
+    { kind: 'uppercut', side: 'rear', at: 0.68, damage: 3.4, kbx: 11, aim: 'body' },
+    { kind: 'jab', side: 'lead', at: 0.80, damage: 2.2, kbx: 8, aim: 'head' },
+    { kind: 'cross', side: 'rear', at: 0.92, damage: 2.8, kbx: 10, aim: 'body' },
+    { kind: 'hook', side: 'lead', at: 1.04, damage: 2.8, kbx: 10, aim: 'head' },
+    { kind: 'body', side: 'rear', at: 1.16, damage: 3.2, kbx: 9, aim: 'body' },
+    { kind: 'uppercut', side: 'lead', at: 1.28, damage: 3.4, kbx: 11, aim: 'head' },
+    { kind: 'overhand', side: 'rear', at: 1.42, damage: 10, kbx: 280, finisher: true, aim: 'head' }
+  ];
+  const FLURRY_TOTAL = 1.66;
 
   function startStrike(f, move) {
     const m = STRIKES[move];
@@ -105,6 +182,21 @@ import { Level } from './level.js';
     f.combat.hitIndex = 0;
     f.combat.hitDone = false;
     f.combat.spin = 0;
+    f.combat.leaped = false;
+    f.combat.leapLanded = false;
+    f.combat.burstDashed = false;
+  }
+
+  function startFlurry(f) {
+    f.combat.state = 'flurry';
+    f.combat.t = FLURRY_TOTAL;
+    f.combat.hitIndex = 0;
+    f.combat.hitDone = false;
+    f.combat.move = null;
+    f.combat.spin = 0;
+    f.combat.hits = 0;
+    f.flurryCd = 8.5;
+    f.trail.length = 0;
   }
 
   const MAX_HP = 100;
@@ -112,6 +204,12 @@ import { Level } from './level.js';
   const DEATH_DOWN = 2.0;
   const DEATH_ASCEND = 1.4;
   const CINE_DEATH = DEATH_FALL + DEATH_DOWN + DEATH_ASCEND;
+  const WORD_LIFE = 0.42;
+  const WORD_LIFE_DOWN = 0.8;
+  const WORD_LIFE_KO = 1.2;
+  const DIZZY_TIME = 1.6;
+  const DIZZY_DEATH = 2.5;
+  const DIZZY_FADE = 0.5;
   const CHAT_OPEN = 2.4;
   const CHAT_REPLY = 2.4;
   const CHAT_GAP = 0.25;
@@ -148,6 +246,16 @@ import { Level } from './level.js';
       ['The teep is underrated.', 'So is breathing.'],
       ["No clinch. We're sticks.", 'Fair.']
     ],
+    mma: [
+      ['Superman punch?', 'Only on Tuesdays.'],
+      ['Check the low kick.', 'I felt it.'],
+      ['Flying knee incoming.', 'I regret asking.']
+    ],
+    shaolin: [
+      ['Temple rules.', 'Which temple?'],
+      ['Palm, not fist.', 'Noted.'],
+      ['Breathe.', 'I am breathing.']
+    ],
     brawler: [
       ['No style. Just vibes.', 'Vibes are a style.'],
       ['I just swing.', 'It shows.'],
@@ -171,6 +279,8 @@ import { Level } from './level.js';
   const SPECTATOR_STYLE_CHAT = {
     wingchun: 'Keep the centerline!',
     muaythai: 'Elbows up!',
+    mma: 'Flying knee!',
+    shaolin: 'Shaolin palm!',
     brawler: 'Swing harder!'
   };
   let chat = null;
@@ -187,10 +297,8 @@ import { Level } from './level.js';
     island: { label: 'Floating Island', src: '/backgrounds/island.jpg', veil: 0.30 }
   };
   let sceneId = 'paper';
-  try {
-    const savedScene = localStorage.getItem('stickman.scene');
-    if (savedScene && SCENES[savedScene]) sceneId = savedScene;
-  } catch (err) {}
+  const savedScene = readStorage('stickman.scene');
+  if (savedScene && SCENES[savedScene]) sceneId = savedScene;
   let sceneDirty = true;
   let celestialStamp = Math.floor(Date.now() / 60000);
   const sceneCanvas = document.createElement('canvas');
@@ -213,7 +321,7 @@ import { Level } from './level.js';
     sceneDirty = true;
     if (sceneSelect) sceneSelect.value = id;
     document.body.dataset.scene = id;
-    try { localStorage.setItem('stickman.scene', id); } catch (err) {}
+    writeStorage('stickman.scene', id);
   }
 
   function drawGround(c, photo) {
@@ -450,8 +558,12 @@ import { Level } from './level.js';
   }
 
   function renderScene() {
-    sceneCanvas.width = Math.max(1, Math.floor(W * DPR));
-    sceneCanvas.height = Math.max(1, Math.floor(H * DPR));
+    const cw = Math.max(1, Math.floor(W * DPR));
+    const ch = Math.max(1, Math.floor(H * DPR));
+    if (sceneCanvas.width !== cw || sceneCanvas.height !== ch) {
+      sceneCanvas.width = cw;
+      sceneCanvas.height = ch;
+    }
     sceneCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
     const sc = SCENES[sceneId];
     const img = sceneImages[sceneId];
@@ -493,7 +605,21 @@ import { Level } from './level.js';
   let slowmoScale = 1;
   let inkFlash = 0;
   let flashTint = '#f7f6f2';
-  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+  let reduceMotion = motionQuery.matches;
+  const onMotionChange = e => {
+    reduceMotion = e.matches;
+    if (reduceMotion) {
+      slowmoT = 0;
+      freezeT = 0;
+      shakeAmt = 0;
+    }
+  };
+  if (typeof motionQuery.addEventListener === 'function') {
+    motionQuery.addEventListener('change', onMotionChange);
+  } else if (typeof motionQuery.addListener === 'function') {
+    motionQuery.addListener(onMotionChange);
+  }
 
   function requestHitStop(sec) {
     freezeT = Math.max(freezeT, sec);
@@ -516,9 +642,13 @@ import { Level } from './level.js';
     splats.length = 0;
   }
 
+  let toolbarHeight = 48;
+  let letterboxHeight = 0;
+
   function syncToolbarHeight() {
     if (!toolbar) return;
-    document.documentElement.style.setProperty('--toolbar-h', toolbar.offsetHeight + 'px');
+    toolbarHeight = toolbar.offsetHeight || 48;
+    document.documentElement.style.setProperty('--toolbar-h', toolbarHeight + 'px');
   }
 
   function resize() {
@@ -539,21 +669,15 @@ import { Level } from './level.js';
       if (f.y > sy) f.y = sy;
     }
     syncToolbarHeight();
+    letterboxHeight = parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue('--letterbox-h')
+    ) || 0;
   }
   window.addEventListener('resize', resize);
   if (toolbar && typeof ResizeObserver === 'function') {
     new ResizeObserver(syncToolbarHeight).observe(toolbar);
   }
   resize();
-
-  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-  const lerp = (a, b, t) => a + (b - a) * t;
-  const smoothstep = (a, b, v) => {
-    const t = clamp((v - a) / (b - a), 0, 1);
-    return t * t * (3 - 2 * t);
-  };
-  const easeOut = t => 1 - (1 - t) * (1 - t);
-  const pick = list => list[Math.floor(Math.random() * list.length)];
 
   function syncCinematicUI() {
     document.body.dataset.cinematic = cinematicOn ? 'on' : 'off';
@@ -568,7 +692,7 @@ import { Level } from './level.js';
 
   function setCinematic(on) {
     cinematicOn = !!on;
-    try { localStorage.setItem('stickman.cinematic', cinematicOn ? '1' : '0'); } catch (err) {}
+    writeStorage('stickman.cinematic', cinematicOn ? '1' : '0');
     if (!cinematicOn) {
       cine.introT = 0;
       cine.koT = 0;
@@ -798,6 +922,19 @@ import { Level } from './level.js';
     }
   }));
 
+  function starPath(ctx, x, y, outer, inner, rotation = 0, points = 5) {
+    ctx.beginPath();
+    for (let i = 0; i < points * 2; i++) {
+      const r = i % 2 ? inner : outer;
+      const a = rotation + (i / (points * 2)) * Math.PI * 2 - Math.PI / 2;
+      const px = x + Math.cos(a) * r;
+      const py = y + Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+  }
+
   function spawnStar(x, y, scale = 1) {
     effects.push({ type: 'star', x, y, t: 0, life: 0.18, scale });
   }
@@ -888,7 +1025,7 @@ import { Level } from './level.js';
     });
   }
 
-  function spawnWord(x, y, text, scale = 1, color = '#1b1a17') {
+  function spawnWord(x, y, text, scale = 1, color = '#1b1a17', life = WORD_LIFE) {
     const wx = clamp(x, 70 * scale, W - 70 * scale);
     const wy = clamp(y, 70, H - 50);
     for (let i = effects.length - 1; i >= 0; i--) {
@@ -898,8 +1035,9 @@ import { Level } from './level.js';
       }
     }
     effects.push({
-      type: 'word', x: wx, y: wy, text, t: 0, life: 0.62,
-      scale, color, rot: (Math.random() - 0.5) * 0.16, vy: -26
+      type: 'word', x: wx, y: wy, text, t: 0, life,
+      scale, color, rot: (Math.random() - 0.5) * 0.16, vy: -30,
+      fade: life > 0.6 ? 0.42 : 0.35
     });
   }
 
@@ -1089,21 +1227,22 @@ import { Level } from './level.js';
         ctx.restore();
       } else if (e.type === 'word') {
         const pop = Math.min(1, e.t / 0.09);
-        const fade = e.t > e.life - 0.18 ? Math.max(0, (e.life - e.t) / 0.18) : 1;
+        const fade = 1 - smoothstep(e.fade, 1, k);
+        if (fade <= 0) continue;
         const sc = e.scale * (0.72 + 0.28 * easeOut(pop));
         ctx.save();
         ctx.translate(e.x, e.y);
         ctx.rotate(e.rot + (1 - pop) * 0.1);
         ctx.scale(sc, sc);
-        ctx.font = '900 italic 44px "Arial Black", Impact, sans-serif';
+        ctx.font = '900 italic 40px "Arial Black", Impact, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.lineJoin = 'round';
-        ctx.globalAlpha = fade * 0.35;
+        ctx.globalAlpha = fade * 0.3;
         ctx.fillStyle = '#a86f00';
         ctx.fillText(e.text, 3, 4);
-        ctx.globalAlpha = fade;
-        ctx.lineWidth = 8;
+        ctx.globalAlpha = fade * 0.92;
+        ctx.lineWidth = 6;
         ctx.strokeStyle = '#f7f6f2';
         ctx.strokeText(e.text, 0, 0);
         ctx.fillStyle = e.color;
@@ -1131,6 +1270,18 @@ import { Level } from './level.js';
     }
   }
 
+  function clearDuelIntro(f) {
+    const intro = f && f.duelIntro;
+    if (!intro) return;
+    for (const g of [intro.kicker, intro.kicked]) {
+      if (g.duelIntro === intro) g.duelIntro = null;
+      g.introRunning = false;
+      g._introStep = 0;
+      if (g.behavior === 'run' && g.fighting) g.behavior = 'idle';
+      if (g.combat.introKick) g.combat.introKick = false;
+    }
+  }
+
   function startDuel(a, b) {
     cancelChatFor(a);
     cancelChatFor(b);
@@ -1150,6 +1301,19 @@ import { Level } from './level.js';
     a.startFight(b);
     b.startFight(a);
     a.trail.length = 0; b.trail.length = 0;
+    const kicker = Math.random() < 0.5 ? a : b;
+    const intro = {
+      t: 0,
+      kicker,
+      kicked: kicker === a ? b : a,
+      phase: 'charge'
+    };
+    a.duelIntro = intro;
+    b.duelIntro = intro;
+    a.introRunning = true;
+    b.introRunning = true;
+    a.facing = b.x >= a.x ? 1 : -1;
+    b.facing = a.x >= b.x ? 1 : -1;
     assignSpectators(a, b);
     cineStartDuel(a, b);
     audio.duel(panFor((a.x + b.x) / 2));
@@ -1165,6 +1329,8 @@ import { Level } from './level.js';
 
   function endDuel(f) {
     const other = f.foe;
+    clearDuelIntro(f);
+    clearDuelIntro(other);
     releaseSpectators(f, other);
     f.foe = null;
     f.stopFight();
@@ -1197,10 +1363,12 @@ import { Level } from './level.js';
     f.behavior = 'idle';
     f.vy = 0;
     f.think = 999;
+    f.dizzyT = DIZZY_DEATH;
     f.dying = {
       phase: 'fall', t: 0, rise: 0, alpha: 1,
       dir: killer && killer.x < f.x ? 1 : -1
     };
+    if (fightPick === f) clearFightPick();
     deselectFigure(f);
     cineDeath(f);
   }
@@ -1251,9 +1419,14 @@ import { Level } from './level.js';
       }
       return { side, spot };
     };
-    let watching = figures.filter(f => f.spectating).length;
+    let watching = 0;
     let count = 0;
-    const used = figures.filter(f => f.spectating).map(f => f.spectating.x);
+    const used = [];
+    for (const f of figures) {
+      if (!f.spectating) continue;
+      watching++;
+      if (f.spectating.floor === floor) used.push(f.spectating.x);
+    }
     const candidates = figures.filter(f => {
       if (f === a || f === b) return false;
       if (f.dying || f.fighting || f.pursuit || f.pursuedBy || f.blown || f.dragging || f.chatting || f.spectating) return false;
@@ -1279,7 +1452,7 @@ import { Level } from './level.js';
         tries++;
       }
       if (used.some(x => Math.abs(x - spot) < 20) || !validSpot(spot, side)) continue;
-      f.spectating = { a, b, x: spot, commentT: 1.5 + Math.random() * 1.5, leaving: 0 };
+      f.spectating = { a, b, floor, x: spot, commentT: 1.5 + Math.random() * 1.5, leaving: 0 };
       f.setBehavior('idle');
       f.think = 999;
       f.vy = 0;
@@ -1351,29 +1524,36 @@ import { Level } from './level.js';
     cancelSpectating(caster);
     cancelSpectating(target);
     cancelFightPick();
+    clearDuelIntro(caster);
+    clearDuelIntro(target);
     const dir = target.x !== caster.x ? Math.sign(target.x - caster.x) : caster.facing;
-    caster.powerCd = cd;
-    caster.pushAnim = 0.45;
-    caster.x = clamp(caster.x - dir * 8, 50, W - 50);
-    spawnRing(caster.x + dir * 26, caster.y - 55);
-    spawnBurst(caster.x + dir * 30, caster.y - 55, 1.7);
-    spawnWord(caster.x + dir * 46, caster.y - 108, 'BOOM', 1.2, '#a86f00');
-    requestSlowmo(0.42, 0.35);
-    requestFlash(0.12, '#ffe082');
-    audio.blast(panFor(caster.x));
-    shakeAmt = Math.max(shakeAmt, 6);
-    requestHitStop(0.04);
     let lethal = false;
     if (target.fighting) {
       target.hp = Math.max(0, target.hp - 20);
       lethal = target.hp <= 0;
     }
+    caster.powerCd = cd;
+    caster.pushAnim = 0.45;
+    caster.x = clamp(caster.x - dir * 8, EDGE_MARGIN, W - EDGE_MARGIN);
+    spawnRing(caster.x + dir * 26, caster.y - 55);
+    spawnBurst(caster.x + dir * 30, caster.y - 55, 1.7);
+    spawnWord(
+      caster.x + dir * 46, caster.y - 150,
+      lethal ? 'K.O.' : 'BOOM', 1.2, '#a86f00',
+      lethal ? WORD_LIFE_KO : WORD_LIFE
+    );
+    requestSlowmo(0.42, 0.35);
+    requestFlash(0.12, '#ffe082');
+    audio.blast(panFor(caster.x));
+    shakeAmt = Math.max(shakeAmt, 6);
+    requestHitStop(0.04);
     if (lethal) {
       beginDeath(target, caster);
       flashStatus('Blast!', 1000);
       return;
     }
     target.resetCombat();
+    target.dizzyT = DIZZY_TIME;
     target.blown = { vx: dir * 1250, vy: -260, phase: 'fly', t: 0 };
     target.vy = 0;
     target.bodyScale = 1;
@@ -1438,6 +1618,38 @@ import { Level } from './level.js';
     }
   }
 
+  function createCombatState(state = 'idle', cd = 0.4 + Math.random() * 0.6) {
+    return {
+      state, t: 0, cd,
+      hitDone: false, kbx: 0, spin: 0, hits: 0, snap: false, react: null, landed: false,
+      move: null, hitIndex: 0, leaped: false, leapLanded: false
+    };
+  }
+
+  const DOWN_STATES = new Set(['knockdown', 'getup', 'launched', 'stagger']);
+  const ATTACK_STATES = new Set(['punch', 'kick', 'combo', 'flurry', 'sweep', 'uppercut', 'flyingkick', 'spinkick', 'strike']);
+  const TRAIL_STATES = new Set(['flyingkick', 'spinkick', 'punch', 'kick', 'combo', 'flurry', 'uppercut', 'strike']);
+  const ATTACK_RE = /punch|kick|combo|flurry|sweep|uppercut|strike/;
+  const ATTACK_FULL_RE = /punch|kick|combo|flurry|spinkick|sweep|uppercut|flyingkick|strike/;
+  const HEAVY_KICK_RE = /spinkick|flyingkick/;
+  const DOWN_BLEND_RE = /knockdown|getup|launched/;
+  const KICK_MOVE_RE = /lowkick|highkick|teep|roundhouse|flyknee/;
+  const ARM_STRIKE_RE = /chainpunch|elbow|superman|overhand|burst/;
+
+  function limb(origin, a1, a2, l1, l2) {
+    const j = { x: origin.x + Math.sin(a1) * l1, y: origin.y + Math.cos(a1) * l1 };
+    const e = { x: j.x + Math.sin(a1 + a2) * l2, y: j.y + Math.cos(a1 + a2) * l2 };
+    return [origin, j, e];
+  }
+
+  function toeFor(ankle, style, f, footLen) {
+    let ang = f * Math.PI * 0.5;
+    if (style === 'point') ang = f * (Math.PI * 0.5 - 0.55);
+    else if (style === 'flex') ang = f * (Math.PI * 0.5 + 0.3);
+    else if (style === 'back') ang = f * Math.PI * 1.5;
+    return { x: ankle.x + Math.sin(ang) * footLen, y: ankle.y + Math.cos(ang) * footLen };
+  }
+
   class StickFigure {
     constructor(x, y, color) {
       this.x = x;
@@ -1463,6 +1675,9 @@ import { Level } from './level.js';
       this.eyeR = 4.5;
       this.fighting = false;
       this.foe = null;
+      this.duelIntro = null;
+      this.introRunning = false;
+      this._introStep = 0;
       this.combatFloor = null;
       this.hp = MAX_HP;
       this.maxHp = MAX_HP;
@@ -1476,11 +1691,10 @@ import { Level } from './level.js';
       this.chatCd = 0;
       this.bubble = null;
       this.trail = [];
-      this.combat = {
-        state: 'idle', t: 0, cd: 0.4 + Math.random() * 0.6,
-        hitDone: false, kbx: 0, spin: 0, hits: 0, snap: false, react: null, landed: false,
-        move: null, hitIndex: 0
-      };
+      this.combat = createCombatState();
+      this.flurryCd = 0;
+      this.dizzyT = 0;
+      this.dizzyPhase = Math.random() * Math.PI * 2;
       this.hasPower = false;
       this.powerCd = 0;
       this.pushAnim = 0;
@@ -1499,6 +1713,9 @@ import { Level } from './level.js';
       this.accX = 0;
       this.accY = 0;
       this.landT = 0;
+      this.restT = 0;
+      this.surfaceY = y;
+      this._renderPose = null;
       this._sec = {
         upper: newSpring(),
         head: newSpring(),
@@ -1512,11 +1729,9 @@ import { Level } from './level.js';
     }
 
     resetCombat() {
-      this.combat = {
-        state: 'ready', t: 0, cd: 0.4 + Math.random() * 0.6,
-        hitDone: false, kbx: 0, spin: 0, hits: 0, snap: false, react: null, landed: false,
-        move: null, hitIndex: 0
-      };
+      this.combat = createCombatState('ready');
+      this.flurryCd = 2.5;
+      this.dizzyT = 0;
     }
 
     startFight(foe) {
@@ -1538,14 +1753,14 @@ import { Level } from './level.js';
     }
 
     stopFight() {
+      clearDuelIntro(this);
       this.fighting = false;
       this.foe = null;
       this.combatFloor = null;
       this.trail.length = 0;
-      this.combat = {
-        state: 'idle', t: 0, cd: 0, hitDone: false, kbx: 0, spin: 0, hits: 0,
-        snap: false, react: null, landed: false, move: null, hitIndex: 0
-      };
+      this.combat = createCombatState('idle', 0);
+      this.flurryCd = 0;
+      this.dizzyT = 0;
     }
 
     setBehavior(b) {
@@ -1574,8 +1789,7 @@ import { Level } from './level.js';
       const r = Math.random();
       if (r < 0.12) this.setBehavior('idle');
       else if (r < 0.42) this.setBehavior('walk');
-      else if (r < 0.68) this.setBehavior('run');
-      else if (r < 0.85) this.setBehavior('crawl');
+      else if (r < 0.75) this.setBehavior('run');
       else this.setBehavior('jump');
       if (this.behavior !== 'idle' && Math.random() < 0.5) {
         this.facing = Math.random() < 0.5 ? -1 : 1;
@@ -1584,6 +1798,10 @@ import { Level } from './level.js';
 
     update(dt, level) {
       if (this.landT > 0) this.landT = Math.max(0, this.landT - dt);
+      if (this.dizzyT > 0) {
+        this.dizzyT = Math.max(0, this.dizzyT - dt);
+        if (!reduceMotion) this.dizzyPhase += dt * 5.5;
+      }
       const px = this.x;
       const py = this.y;
       this._update(dt, level);
@@ -1599,10 +1817,9 @@ import { Level } from './level.js';
       return level.surfaceAt(this.x, this.y);
     }
 
-    _waitForChallenger(dt, level) {
-      const sy = pursuitSurfaceY(level, this.x, this.y);
+    _settleOnSurface(dt, sy) {
       if (this.y < sy) {
-        this.vy += 1500 * dt;
+        this.vy += GRAVITY * dt;
         this.y += this.vy * dt;
         if (this.y >= sy) {
           this.y = sy;
@@ -1612,19 +1829,25 @@ import { Level } from './level.js';
         this.y = sy;
         this.vy = 0;
       }
+    }
+
+    _waitForChallenger(dt, level) {
+      const sy = pursuitSurfaceY(level, this.x, this.y);
+      this._settleOnSurface(dt, sy);
       this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 10));
       this.behavior = 'idle';
       this.facing = this.pursuedBy.x < this.x ? -1 : 1;
       this.phase += dt * 1.6;
     }
 
-    _walkStep(dt, targetX, speed = 70) {
+    _walkStep(dt, targetX, speed = WALK_SPEED) {
       const dir = Math.sign(targetX - this.x) || this.facing;
       this.facing = dir;
       this.behavior = 'walk';
+      const prevX = this.x;
       this.x += dir * speed * this.speedMul * dt;
-      this.x = clamp(this.x, 50, W - 50);
-      this.phase += dt * speed * 0.11 * this.speedMul;
+      this.x = clamp(this.x, EDGE_MARGIN, W - EDGE_MARGIN);
+      this.phase += (Math.abs(this.x - prevX) / STRIDE_WALK) * Math.PI * 2;
       const stepIdx = Math.floor(this.phase / Math.PI);
       if (stepIdx !== this._stepPhase) {
         this._stepPhase = stepIdx;
@@ -1635,21 +1858,11 @@ import { Level } from './level.js';
 
     _chatIdle(dt, level) {
       const sy = this._surfaceY(level);
-      if (this.y < sy) {
-        this.vy += 1500 * dt;
-        this.y += this.vy * dt;
-        if (this.y >= sy) {
-          this.y = sy;
-          this.vy = 0;
-        }
-      } else {
-        this.y = sy;
-        this.vy = 0;
-      }
+      this._settleOnSurface(dt, sy);
       this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 10));
       if (chat && chat.phase === 'approach' && chat.a === this &&
           Math.abs(chat.walkX - this.x) > 4) {
-        this._walkStep(dt, chat.walkX, 70);
+        this._walkStep(dt, chat.walkX, WALK_SPEED);
       } else {
         this.behavior = 'idle';
       }
@@ -1673,17 +1886,7 @@ import { Level } from './level.js';
         this.bubble = makeBubble(pick(['Good fight.', 'That was quick.', 'Ouch.']), 1.5);
       }
       const sy = this._surfaceY(level);
-      if (this.y < sy) {
-        this.vy += 1500 * dt;
-        this.y += this.vy * dt;
-        if (this.y >= sy) {
-          this.y = sy;
-          this.vy = 0;
-        }
-      } else {
-        this.y = sy;
-        this.vy = 0;
-      }
+      this._settleOnSurface(dt, sy);
       this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 10));
       if (s.leaving > 0) {
         s.leaving -= dt;
@@ -1698,7 +1901,7 @@ import { Level } from './level.js';
       }
       const mid = (a.x + b.x) / 2;
       if (Math.abs(s.x - this.x) > 4) {
-        this._walkStep(dt, s.x, 70);
+        this._walkStep(dt, s.x, WALK_SPEED);
         this.facing = mid < this.x ? -1 : 1;
         return;
       }
@@ -1728,17 +1931,7 @@ import { Level } from './level.js';
       this.vy = 0;
       this.phase += dt * 2;
       const sy = this._surfaceY(level);
-      if (this.y < sy) {
-        this.vy += 1500 * dt;
-        this.y += this.vy * dt;
-        if (this.y >= sy) {
-          this.y = sy;
-          this.vy = 0;
-        }
-      } else {
-        this.y = sy;
-        this.vy = 0;
-      }
+      this._settleOnSurface(dt, sy);
       this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 10));
       if (d.phase === 'fall') {
         if (d.t >= DEATH_FALL) {
@@ -1754,6 +1947,7 @@ import { Level } from './level.js';
           d.t = 0;
           d.rise = 0;
           d.alpha = 1;
+          this.dizzyT = 0;
           spawnRing(this.x, this.y - 30, 1.1);
           spawnStar(this.x, this.y - 55, 1.2);
           audio.whoosh(panFor(this.x), 1.1);
@@ -1790,7 +1984,7 @@ import { Level } from './level.js';
         return;
       }
       if (p.drop) {
-        this.vy += 1500 * dt;
+        this.vy += GRAVITY * dt;
         this.y += this.vy * dt;
         const gy = level.surfaceAt(this.x, this.y + 8);
         if (this.y >= gy) {
@@ -1823,10 +2017,12 @@ import { Level } from './level.js';
       this.facing = dir;
       this.behavior = 'run';
       this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 10));
-      this.x += dir * 200 * this.speedMul * dt;
-      this.x = clamp(this.x, 50, W - 50);
+      const prevX = this.x;
+      this.x += dir * RUN_SPEED * this.speedMul * dt;
+      this.x = clamp(this.x, EDGE_MARGIN, W - EDGE_MARGIN);
+      this.phase += (Math.abs(this.x - prevX) / STRIDE_RUN) * Math.PI * 2;
       if (myFloor === 1 && targetFloor === 0 && target.x >= level.mezzX0 &&
-          (this.x >= level.mezzX1 || this.x >= W - 50 - 0.5)) {
+          (this.x >= level.mezzX1 || this.x >= W - EDGE_MARGIN - 0.5)) {
         this.x = Math.max(this.x, level.mezzX1 + 2);
         p.drop = true;
         this.vy = 0;
@@ -1835,7 +2031,6 @@ import { Level } from './level.js';
       }
       this.y = pursuitSurfaceY(level, this.x, this.y);
       this.vy = 0;
-      this.phase += dt * 200 * 0.085 * this.speedMul;
       const stride = Math.PI * 2;
       const stepIdx = Math.floor(this.phase / stride);
       if (stepIdx !== this._stepPhase) {
@@ -1876,7 +2071,7 @@ import { Level } from './level.js';
       }
       if (step <= 0) return;
       const cs = this.fighting ? this.combat.state : '';
-      const attacking = /punch|kick|combo|sweep|uppercut|strike/.test(cs);
+      const attacking = ATTACK_RE.test(cs);
       const armScale = attacking ? 0.16 : 1;
       const upperX = clamp(-this.accX * 0.005, -5.5, 5.5);
       const upperY = clamp(-this.accY * 0.0018 - this.velY * 0.003, -4, 4);
@@ -1925,6 +2120,7 @@ import { Level } from './level.js';
 
     _update(dt, level) {
       const groundY = this._surfaceY(level);
+      this.surfaceY = groundY;
       this._tickFace(dt);
       this.randomizeBehavior(dt, groundY);
       const speed = this.speedMul;
@@ -1959,7 +2155,7 @@ import { Level } from './level.js';
           this.x += b.vx * dt;
           b.vy += 180 * dt;
           this.y += b.vy * dt;
-          const margin = 50;
+          const margin = EDGE_MARGIN;
           const atWall = (b.vx < 0 && this.x <= margin) || (b.vx > 0 && this.x >= W - margin);
           if (atWall) {
             this.x = b.vx < 0 ? margin : W - margin;
@@ -1987,7 +2183,7 @@ import { Level } from './level.js';
             audio.land(panFor(this.x), true);
           }
         } else if (b.phase === 'fall') {
-          b.vy += 1500 * dt;
+          b.vy += GRAVITY * dt;
           this.y += b.vy * dt;
           if (this.y >= groundY) {
             this.y = groundY;
@@ -2054,7 +2250,7 @@ import { Level } from './level.js';
         } else {
           this.jumpPhase = 'air';
           this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 10));
-          this.vy += 1500 * dt;
+          this.vy += GRAVITY * dt;
           this.y += this.vy * dt;
           if (this.y >= groundY) {
             this.y = groundY;
@@ -2069,7 +2265,7 @@ import { Level } from './level.js';
           }
         }
         this.x += this.facing * 40 * speed * dt * (this.y < groundY - 2 ? 1 : 0);
-        const margin = 50;
+        const margin = EDGE_MARGIN;
         if (this.x < margin) { this.x = margin; this.facing = 1; }
         if (this.x > W - margin) { this.x = W - margin; this.facing = -1; }
         return;
@@ -2081,7 +2277,7 @@ import { Level } from './level.js';
       }
       this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 10));
       if (this.y < groundY || this.vy < 0) {
-        this.vy += 1500 * dt;
+        this.vy += GRAVITY * dt;
         this.y += this.vy * dt;
         if (this.y >= groundY) {
           this.y = groundY;
@@ -2098,16 +2294,17 @@ import { Level } from './level.js';
       }
 
       let moveSpeed = 0;
-      if (this.behavior === 'walk') moveSpeed = 70;
-      else if (this.behavior === 'run') moveSpeed = 200;
-      else if (this.behavior === 'crawl') moveSpeed = 45;
+      if (this.behavior === 'walk') moveSpeed = WALK_SPEED;
+      else if (this.behavior === 'run') moveSpeed = RUN_SPEED;
 
       if (moveSpeed > 0) {
+        const prevX = this.x;
         this.x += this.facing * moveSpeed * speed * dt;
-        let phaseRate = 0.09;
-        if (this.behavior === 'walk') phaseRate = 0.11;
-        else if (this.behavior === 'run') phaseRate = 0.085;
-        this.phase += dt * moveSpeed * phaseRate * speed;
+        const margin = EDGE_MARGIN;
+        if (this.x < margin) { this.x = margin; this.facing = 1; }
+        if (this.x > W - margin) { this.x = W - margin; this.facing = -1; }
+        const stridePx = this.behavior === 'walk' ? STRIDE_WALK : STRIDE_RUN;
+        this.phase += (Math.abs(this.x - prevX) / stridePx) * Math.PI * 2;
         const stride = this.behavior === 'run' ? Math.PI * 2 : Math.PI;
         const stepIdx = Math.floor(this.phase / stride);
         if (stepIdx !== this._stepPhase) {
@@ -2116,9 +2313,6 @@ import { Level } from './level.js';
           audio.step(panFor(this.x), running);
           spawnStepDust(this.x, this.y, running, this.facing);
         }
-        const margin = 50;
-        if (this.x < margin) { this.x = margin; this.facing = 1; }
-        if (this.x > W - margin) { this.x = W - margin; this.facing = -1; }
         if (Math.random() < 0.002) this.facing *= -1;
       } else {
         this.phase += dt * 1.6;
@@ -2150,8 +2344,8 @@ import { Level } from './level.js';
         this.combat.snap = false;
         this.blendDur = snap ? 0.045 : 0.14;
         if (!snap) {
-          if (/knockdown|getup|launched/.test(key)) this.blendDur = 0.18;
-          else if (/punch|kick|combo|sweep|uppercut|strike/.test(key)) this.blendDur = 0.09;
+          if (DOWN_BLEND_RE.test(key)) this.blendDur = 0.18;
+          else if (ATTACK_RE.test(key)) this.blendDur = 0.09;
         }
         if (!this.prevPose) this.blendT = 1;
       }
@@ -2162,21 +2356,28 @@ import { Level } from './level.js';
     }
 
     landHit(enemy, opts) {
-      const { range, kbx, kdChance = 0, freeze = 0.05, shake = 5, starScale = 1, damage = 0 } = opts;
+      const {
+        range, kbx, kdChance = 0, freeze = 0.05, shake = 5, starScale = 1,
+        damage = 0, fx = null, flurry = false, finisher = false, pitch = null, aim = null
+      } = opts;
       const dist = Math.abs(enemy.x - this.x);
       if (dist > range) return;
       if (enemy.dying || !enemy.fighting) return;
       const es = enemy.combat.state;
+      const aimPose = enemy._renderPose;
+      const headY = aim === 'head' && aimPose ? enemy.y + aimPose.head.y : null;
+      const bodyY = aim === 'body' && aimPose ? enemy.y + aimPose.chest.y : null;
+      const aimY = headY ?? bodyY ?? this.y - 55;
       if (es === 'block') {
         this.x -= this.facing * 10;
-        spawnStar((this.x + enemy.x) / 2, this.y - 60, 0.6);
-        spawnRing((this.x + enemy.x) / 2, this.y - 60, 0.45);
+        spawnStar((this.x + enemy.x) / 2, aimY, 0.6);
+        spawnRing((this.x + enemy.x) / 2, aimY, 0.45);
         audio.block(panFor((this.x + enemy.x) / 2));
         return;
       }
       if (es === 'dodge' && enemy.combat.t > 0.14) return;
-      if (es === 'stagger' || es === 'knockdown' || es === 'getup' || es === 'launched') return;
-      if (Math.random() < 0.25 && !opts.guaranteedKd) {
+      if ((es === 'stagger' && !flurry) || es === 'knockdown' || es === 'getup' || es === 'launched') return;
+      if (!flurry && Math.random() < (fx === 'superman' ? 0.1 : 0.25) && !opts.guaranteedKd) {
         enemy.combat.state = 'dodge';
         enemy.combat.t = 0.3;
         audio.whoosh(panFor(enemy.x), 0.6);
@@ -2186,7 +2387,7 @@ import { Level } from './level.js';
       const lethal = enemy.hp <= 0;
       const dir = enemy.x >= this.x ? 1 : -1;
       const midX = (this.x + enemy.x) / 2;
-      const hitY = this.y - 55;
+      const hitY = aimY;
       const knocked = lethal || opts.guaranteedKd || Math.random() < kdChance;
       const reactStrength = clamp(0.5 + kbx / 320, 0.5, 1.3);
       const reactKind = knocked || kbx >= 240 ? 'heavy' : kbx >= 150 || starScale >= 1.2 ? 'kick' : 'punch';
@@ -2200,39 +2401,58 @@ import { Level } from './level.js';
         enemy.combat.kbx = dir * Math.max(160, kbx);
         enemy.combat.landed = false;
         enemy.facing = dir > 0 ? -1 : 1;
+        enemy.dizzyT = DIZZY_TIME;
         spawnDust(enemy.x, enemy.y, 7);
         spawnStar(midX, hitY, starScale * 1.3);
         shakeAmt = Math.max(shakeAmt, Math.max(shake, 9));
         requestHitStop(0.07);
       } else {
         enemy.combat.state = 'stagger';
-        enemy.combat.t = 0.35;
-        enemy.combat.reactDur = 0.35;
-        enemy.combat.react = { kind: reactKind, strength: reactStrength, dir };
+        enemy.combat.t = flurry ? 0.12 : 0.35;
+        enemy.combat.reactDur = flurry ? 0.12 : 0.35;
+        enemy.combat.react = {
+          kind: reactKind,
+          strength: flurry ? 0.55 : reactStrength,
+          dir
+        };
         enemy.combat.snap = true;
         enemy.combat.spin = 0;
         enemy.combat.kbx = dir * kbx;
         spawnStar(midX, hitY, starScale);
         shakeAmt = Math.max(shakeAmt, shake);
-        requestHitStop(freeze);
+        if (!flurry) requestHitStop(freeze);
       }
-      spawnInk(midX, hitY, knocked ? 6 : 3);
-      spawnRing(midX, hitY, clamp(0.7 + kbx / 300, 0.7, 1.7));
+      if (flurry) {
+        spawnInk(midX, hitY, 1);
+        spawnRing(midX, hitY, 0.45);
+      } else {
+        spawnInk(midX, hitY, knocked ? 6 : 3);
+        spawnRing(midX, hitY, clamp(0.7 + kbx / 300, 0.7, 1.7));
+      }
       if (knocked) {
         requestSlowmo(0.38, 0.5);
         spawnBurst(midX, hitY, starScale * 1.6);
-        spawnWord(enemy.x, enemy.y - 104, 'K.O.', 1.5, '#a86f00');
+        spawnWord(
+          enemy.x, enemy.y - 158,
+          finisher ? (lethal ? 'K.O.' : '12 HIT COMBO!') : (lethal ? 'K.O.' : 'DOWN!'),
+          finisher ? 1.15 : 1.5, '#a86f00',
+          finisher ? WORD_LIFE_KO : (lethal ? WORD_LIFE_KO : WORD_LIFE_DOWN)
+        );
       } else if (kbx >= 240) {
         spawnBurst(midX, hitY, 1.15);
-        spawnWord(midX, hitY - 42, pick(['BAM', 'WHAM']), 1.1);
+        spawnWord(midX, hitY - 64, pick(['BAM', 'WHAM']), 1.1);
       } else if (kbx >= 150) {
-        spawnWord(midX, hitY - 36, pick(['POW', 'WHACK']), 0.95);
+        spawnWord(midX, hitY - 58, pick(['POW', 'WHACK']), 0.95);
+      }
+      if (fx === 'superman' && !lethal) {
+        audio.supermanHit(panFor(midX));
+        if (!knocked) requestSlowmo(0.34, 0.4);
       }
       if (knocked || kbx >= 150) {
         spawnSplat(midX + dir * 8, enemy._surfaceY(level), clamp(0.85 + kbx / 500, 0.85, 1.5));
       }
       if (knocked || kbx >= 150) requestFlash(knocked ? 0.22 : 0.16, '#ffd54f');
-      audio.hit(reactKind, clamp(0.75 + kbx / 420, 0.75, 1.35), panFor(midX));
+      audio.hit(reactKind, pitch !== null ? pitch : clamp(0.75 + kbx / 420, 0.75, 1.35), panFor(midX));
       if (knocked && kbx >= 240) audio.ko(panFor(enemy.x));
       if (lethal) beginDeath(enemy, this);
       else if (knocked) cineKO(enemy);
@@ -2245,14 +2465,15 @@ import { Level } from './level.js';
       const xMax = fb.x1;
       const c = this.combat;
       c.t -= dt;
+      if (this.flurryCd > 0) this.flurryCd = Math.max(0, this.flurryCd - dt);
       this.phase += dt * 8;
       const stateKey = c.state === 'strike' ? `strike:${c.move}` : c.state;
       if (stateKey !== this._lastCombatState) {
         this._lastCombatState = stateKey;
-        if (/punch|kick|combo|spinkick|sweep|uppercut|flyingkick|strike/.test(c.state)) {
+        if (ATTACK_FULL_RE.test(c.state)) {
           const power = c.state === 'strike'
-            ? (c.move === 'roundhouse' ? 1.1 : c.move === 'teep' ? 1.0 : 0.8)
-            : (/spinkick|flyingkick/.test(c.state) ? 1.2 : 0.8);
+            ? (c.move === 'superman' ? 1.5 : c.move === 'highkick' ? 1.35 : c.move === 'burst' ? 1.2 : c.move === 'flyknee' ? 1.25 : c.move === 'roundhouse' ? 1.1 : c.move === 'teep' ? 1.0 : 0.8)
+            : (HEAVY_KICK_RE.test(c.state) ? 1.2 : 0.8);
           audio.whoosh(panFor(this.x), power);
         }
       }
@@ -2273,18 +2494,18 @@ import { Level } from './level.js';
         c.state = 'wander';
         this.x += this.facing * 50 * this.speedMul * dt;
         this.x = clamp(this.x, xMin, xMax);
-        if (this.x <= 50) this.facing = 1;
-        if (this.x >= W - 50) this.facing = -1;
+        if (this.x <= EDGE_MARGIN) this.facing = 1;
+        if (this.x >= W - EDGE_MARGIN) this.facing = -1;
         return;
       }
 
       const dx = enemy.x - this.x;
       const dist = Math.abs(dx);
-      const facingFrozen = c.state === 'knockdown' || c.state === 'getup' || c.state === 'launched';
+      const facingFrozen = c.state === 'knockdown' || c.state === 'getup' || c.state === 'launched' ||
+        (c.state === 'strike' && c.leaped);
       if (dist > 4 && !facingFrozen) this.facing = dx > 0 ? 1 : -1;
 
-      const downStates = ['knockdown', 'getup', 'launched', 'stagger'];
-      if (dist < 26 && !downStates.includes(c.state) && !downStates.includes(enemy.combat.state)) {
+      if (dist < 26 && !DOWN_STATES.has(c.state) && !DOWN_STATES.has(enemy.combat.state)) {
         this.x -= this.facing * (26 - dist) * 0.5;
         this.x = clamp(this.x, xMin, xMax);
       }
@@ -2301,10 +2522,66 @@ import { Level } from './level.js';
         return;
       }
 
+      const intro = this.duelIntro;
+      if (intro) {
+        this.facing = dx > 0 ? 1 : -1;
+        if (intro.phase === 'charge') {
+          this.introRunning = true;
+          if (this.behavior !== 'run') {
+            this.behavior = 'run';
+            this.phase = 0;
+            this._stepPhase = 0;
+          }
+          if (this === intro.kicker) {
+            intro.t += dt;
+            if (dist <= 302 || intro.t >= 0.7) {
+              intro.phase = 'kick';
+              this.introRunning = false;
+              c.introKick = true;
+              c.state = 'flyingkick';
+              c.t = 0.85;
+              c.hitDone = false;
+              c.kickDone = false;
+              c.lungeV = 0;
+              intro.kicked.introRunning = false;
+              const dr = Math.random();
+              if (dr < 0.34) {
+                intro.kicked.combat.state = 'block';
+                intro.kicked.combat.t = 0.75;
+              } else if (dr < 0.62) {
+                intro.kicked.combat.state = 'dodge';
+                intro.kicked.combat.t = 0.5;
+              } else {
+                intro.kicked.combat.state = 'ready';
+                intro.kicked.combat.t = 0;
+              }
+              return;
+            }
+          }
+          if (dist > 302) {
+            this.x += this.facing * RUN_SPEED * dt;
+            this.x = clamp(this.x, xMin, xMax);
+            this._introStep += Math.abs(RUN_SPEED * dt);
+            if (this._introStep >= 34) {
+              this._introStep = 0;
+              spawnStepDust(this.x, this.y, true, this.facing);
+              audio.step(panFor(this.x), true);
+            }
+          }
+          return;
+        }
+        if (intro.phase === 'kick' && this === intro.kicked) {
+          this.introRunning = false;
+          if (c.state === 'dodge') this.x += this.facing * -95 * dt;
+          else if (c.state === 'block' && c.t <= 0) c.state = 'ready';
+          this.x = clamp(this.x, xMin, xMax);
+          return;
+        }
+      }
+
       const airborne = this.y < groundY - 2;
-      const trailStates = ['flyingkick', 'spinkick', 'punch', 'kick', 'combo', 'uppercut', 'strike'];
-      if (trailStates.includes(c.state)) {
-        this.trail.push({ x: this.x, y: this.y, spin: c.spin, snap: this.pose() });
+      if (TRAIL_STATES.has(c.state)) {
+        this.trail.push({ x: this.x, y: this.y, spin: c.spin, snap: this._renderPose || this.pose() });
         if (this.trail.length > 6) this.trail.shift();
       } else {
         this.trail.length = 0;
@@ -2353,7 +2630,8 @@ import { Level } from './level.js';
       }
 
       if (c.state === 'approach') {
-        if (dist > 78) {
+        const stopAt = this.style === 'mma' ? 185 : 78;
+        if (dist > stopAt) {
           this.x += this.facing * 95 * this.speedMul * dt;
         } else {
           c.state = 'ready';
@@ -2373,9 +2651,8 @@ import { Level } from './level.js';
       if (c.state === 'block') {
         if (c.t <= 0) {
           c.state = 'ready';
-          c.cd = this.style === 'wingchun'
-            ? 0.16 + Math.random() * 0.18
-            : 0.35 + Math.random() * 0.35;
+          const profile = STYLE_COMBAT[this.style] || STYLE_COMBAT.brawler;
+          c.cd = profile.recoverMin + Math.random() * profile.recoverJitter;
         }
         return;
       }
@@ -2383,28 +2660,49 @@ import { Level } from './level.js';
       if (c.state === 'flyingkick') {
         const total = 0.85;
         const elapsed = total - c.t;
+        const longKick = !!c.introKick;
         if (elapsed < 0.18) {
           this.bodyScale = lerp(1, 0.82, elapsed / 0.18);
         } else if (!c.hitDone && elapsed >= 0.18) {
           c.hitDone = true;
           this.bodyScale = 1;
-          this.vy = -400;
-          const gap = Math.max(0, dist - 90);
-          c.lungeV = this.facing * clamp(gap / 0.35, 240, 620);
+          this.vy = longKick ? -520 : -400;
+          const gap = Math.max(0, dist - (longKick ? 50 : 90));
+          c.lungeV = this.facing * (longKick
+            ? clamp(gap / 0.30, 320, 1100)
+            : clamp(gap / 0.35, 240, 620));
           spawnDust(this.x, this.y, 4);
+          if (longKick) audio.whoosh(panFor(this.x), 1.35);
         }
         if (c.hitDone && airborne) {
           this.x += c.lungeV * dt;
           this.x = clamp(this.x, xMin, xMax);
-          if (!c.kickDone && elapsed > 0.24 && Math.abs(enemy.x - this.x) <= 130) {
+          const hitAt = longKick ? 0.30 : 0.24;
+          const hitRange = longKick ? 285 : 130;
+          if (!c.kickDone && elapsed > hitAt && Math.abs(enemy.x - this.x) <= hitRange) {
             c.kickDone = true;
-            this.landHit(enemy, { range: 130, kbx: 280, kdChance: 0.4, freeze: 0.07, shake: 10, starScale: 1.4, damage: 18 });
+            this.landHit(enemy, longKick
+              ? { range: 285, kbx: 320, kdChance: 0.5, freeze: 0.09, shake: 12, starScale: 1.6, damage: 20 }
+              : { range: 130, kbx: 280, kdChance: 0.4, freeze: 0.07, shake: 10, starScale: 1.4, damage: 18 });
             c.lungeV *= 0.3;
+            if (longKick) {
+              clearDuelIntro(this);
+              c.introKick = false;
+            }
+          }
+          if (longKick && !c.kickDone && elapsed > 0.64) {
+            c.kickDone = true;
+            clearDuelIntro(this);
+            c.introKick = false;
           }
         }
         if (c.hitDone && !airborne && elapsed > 0.3) {
           this.landT = 0.4;
           spawnDust(this.x, this.y, reduceMotion ? 3 : 6);
+          if (c.introKick) {
+            clearDuelIntro(this);
+            c.introKick = false;
+          }
           c.state = 'ready';
           c.cd = 0.5 + Math.random() * 0.4;
           c.hitDone = false;
@@ -2412,6 +2710,10 @@ import { Level } from './level.js';
         }
         if (c.t <= -0.4) {
           this.y = groundY; this.vy = 0;
+          if (c.introKick) {
+            clearDuelIntro(this);
+            c.introKick = false;
+          }
           c.state = 'ready'; c.cd = 0.4;
           c.hitDone = false; c.kickDone = false;
         }
@@ -2540,6 +2842,53 @@ import { Level } from './level.js';
         return;
       }
 
+      if (c.state === 'flurry') {
+        const elapsed = FLURRY_TOTAL - c.t;
+        if (elapsed < 0.24) this.x += this.facing * 55 * this.speedMul * dt;
+        const eState = enemy.combat.state;
+        const hardDown = eState === 'knockdown' || eState === 'getup' || eState === 'launched';
+        const done = c.hitIndex >= FLURRY_MOVES.length;
+        if (enemy.dying || !enemy.fighting || (!done && hardDown) ||
+            eState === 'block' || eState === 'dodge' || dist > 122) {
+          c.state = 'ready';
+          c.hitIndex = 0;
+          c.cd = 0.55 + Math.random() * 0.35;
+          this.trail.length = 0;
+          this.x = clamp(this.x, xMin, xMax);
+          return;
+        }
+        while (c.hitIndex < FLURRY_MOVES.length && elapsed >= FLURRY_MOVES[c.hitIndex].at) {
+          const h = FLURRY_MOVES[c.hitIndex];
+          if (!h.finisher && (enemy.combat.state === 'knockdown' ||
+              enemy.combat.state === 'getup' || enemy.combat.state === 'launched')) break;
+          c.hitIndex++;
+          this.landHit(enemy, {
+            range: h.finisher ? 118 : 108,
+            kbx: h.kbx,
+            damage: h.damage,
+            freeze: h.finisher ? 0.09 : 0,
+            shake: h.finisher ? 14 : 2.5,
+            starScale: h.finisher ? 1.55 : 0.55,
+            kdChance: 0,
+            guaranteedKd: !!h.finisher,
+            flurry: true,
+            finisher: !!h.finisher,
+            aim: h.aim,
+            pitch: 0.92 + c.hitIndex * 0.025 - (h.aim === 'body' ? 0.12 : 0)
+          });
+          if (enemy.combat.state === 'block' || enemy.combat.state === 'dodge') break;
+          if (h.finisher) break;
+        }
+        if (c.t <= 0) {
+          c.state = 'ready';
+          c.hitIndex = 0;
+          c.cd = 1.1 + Math.random() * 0.5;
+          this.trail.length = 0;
+        }
+        this.x = clamp(this.x, xMin, xMax);
+        return;
+      }
+
       if (c.state === 'strike') {
         const m = STRIKES[c.move];
         if (!m) {
@@ -2551,7 +2900,64 @@ import { Level } from './level.js';
           return;
         }
         const elapsed = m.total - c.t;
-        if (elapsed < m.lungeEnd) this.x += this.facing * m.lungeSpeed * dt;
+        if (c.move === 'burst') {
+          if (elapsed < m.hop.dur) {
+            this.x -= this.facing * (m.hop.dist / m.hop.dur) * dt;
+          } else if (elapsed < m.dash.to) {
+            if (!c.burstDashed) {
+              c.burstDashed = true;
+              spawnDust(this.x, this.y, reduceMotion ? 4 : 8);
+              spawnSkid(this.x, this.y, this.facing);
+              audio.whoosh(panFor(this.x), 1.2);
+            }
+            const stopX = enemy.x - this.facing * m.dash.stopGap;
+            const dir = Math.sign(stopX - this.x) || this.facing;
+            this.x += dir * Math.min(m.dash.speed * dt, Math.abs(stopX - this.x));
+          }
+          while (c.hitIndex < m.hits.length && elapsed >= m.hits[c.hitIndex].at) {
+            const h = m.hits[c.hitIndex++];
+            this.landHit(enemy, { ...m, ...h });
+          }
+          if (c.t <= 0) {
+            c.state = 'ready';
+            c.cd = m.cd + Math.random() * m.cdJitter;
+            c.move = null;
+            c.hitIndex = 0;
+            c.burstDashed = false;
+          }
+          this.x = clamp(this.x, xMin, xMax);
+          return;
+        }
+        if (m.leap) {
+          if (!c.leaped && elapsed >= m.leap.at) {
+            c.leaped = true;
+            this.vy = m.leap.vy;
+            this.bodyScale = 1.06;
+            const flight = (2 * Math.abs(m.leap.vy)) / GRAVITY;
+            const gap = m.leap.gap ?? 78;
+            const targetGap = Math.max(0, dist - gap);
+            c.lungeV = this.facing * clamp(targetGap / flight, m.leap.min, m.leap.max);
+            spawnDust(this.x, this.y, reduceMotion ? 4 : 8);
+            if (c.move === 'superman') audio.supermanLaunch(panFor(this.x));
+            else audio.leap(panFor(this.x), 1.1);
+          }
+          if (c.leaped) {
+            if (!c.leapLanded) this.x += c.lungeV * dt;
+            if (!c.leapLanded && !airborne && elapsed > m.leap.at + 0.06) {
+              c.leapLanded = true;
+              this.landT = 0.4;
+              this.bodyScale = 0.88;
+              spawnDust(this.x, this.y, reduceMotion ? 4 : 8);
+              spawnSkid(this.x, this.y, this.facing);
+              audio.land(panFor(this.x), true);
+              if (c.t > 0.22) c.t = 0.22;
+            }
+          } else if (elapsed < m.lungeEnd) {
+            this.x += this.facing * m.lungeSpeed * dt;
+          }
+        } else if (elapsed < m.lungeEnd) {
+          this.x += this.facing * m.lungeSpeed * dt;
+        }
         while (c.hitIndex < m.hits.length && elapsed >= m.hits[c.hitIndex].at) {
           const h = m.hits[c.hitIndex++];
           this.landHit(enemy, { ...m, ...h });
@@ -2561,6 +2967,8 @@ import { Level } from './level.js';
           c.cd = m.cd + Math.random() * m.cdJitter;
           c.move = null;
           c.hitIndex = 0;
+          c.leaped = false;
+          c.leapLanded = false;
         }
         this.x = clamp(this.x, xMin, xMax);
         return;
@@ -2570,19 +2978,18 @@ import { Level } from './level.js';
       c.cd -= dt;
       if (airborne) return;
       const eState = enemy.combat.state;
-      const downStates2 = ['knockdown', 'getup', 'launched', 'stagger'];
-      if (downStates2.includes(eState)) {
+      if (DOWN_STATES.has(eState)) {
         c.cd = 0.12;
         if (dist > 120) c.state = 'approach';
         return;
       }
-      const enemyAttacking = ['punch', 'kick', 'flyingkick', 'spinkick', 'sweep', 'uppercut', 'combo', 'strike'].includes(eState);
-      const defendChance = this.style === 'wingchun' ? 0.085 : 0.06;
+      const enemyAttacking = ATTACK_STATES.has(eState);
+      const profile = STYLE_COMBAT[this.style] || STYLE_COMBAT.brawler;
+      const defendChance = profile.defend;
       if (enemyAttacking && dist < 125 && Math.random() < defendChance) {
-        const blockChance = this.style === 'wingchun' ? 0.72 : this.style === 'muaythai' ? 0.52 : 0.45;
-        if (Math.random() < blockChance) {
+        if (Math.random() < profile.block) {
           c.state = 'block';
-          c.t = this.style === 'wingchun' ? 0.3 : 0.45;
+          c.t = profile.blockT;
         } else {
           c.state = 'dodge';
           c.t = 0.3;
@@ -2601,8 +3008,11 @@ import { Level } from './level.js';
       }
       if (c.cd <= 0) {
         if (this.style === 'wingchun') {
-          if (dist > 96) {
+          if (dist > 130) {
             c.state = 'approach';
+          } else if (dist > 96) {
+            if (Math.random() < 0.5) startStrike(this, 'burst');
+            else c.state = 'approach';
           } else {
             const r = Math.random();
             if (r < 0.58) startStrike(this, 'chainpunch');
@@ -2629,6 +3039,59 @@ import { Level } from './level.js';
             else if (r < 0.9) startStrike(this, 'teep');
             else if (r < 0.96) { c.state = 'block'; c.t = 0.4; }
             else { c.state = 'dodge'; c.t = 0.3; }
+          }
+        } else if (this.style === 'mma') {
+          const r = Math.random();
+          if (dist > 240) {
+            c.state = 'approach';
+          } else if (dist > 170) {
+            if (dist < 205 && r < 0.4) startStrike(this, 'superman');
+            else if (dist < 195 && r < 0.55) startStrike(this, 'highkick');
+            else if (r < 0.7) startStrike(this, 'flyknee');
+            else if (r < 0.82) c.state = 'approach';
+            else if (r < 0.94) { c.state = 'block'; c.t = 0.32; }
+            else { c.state = 'dodge'; c.t = 0.3; }
+          } else if (dist > 110) {
+            if (r < 0.28) startStrike(this, 'highkick');
+            else if (r < 0.44 && dist < 150) startStrike(this, 'burst');
+            else if (r < 0.6) startStrike(this, 'flyknee');
+            else if (r < 0.76) startStrike(this, 'overhand');
+            else if (r < 0.88) startStrike(this, 'lowkick');
+            else if (r < 0.94) { c.state = 'block'; c.t = 0.36; }
+            else { c.state = 'dodge'; c.t = 0.3; }
+          } else {
+            if (this.flurryCd <= 0 && dist < 108 &&
+                eState !== 'block' && eState !== 'dodge' && r < 0.4) {
+              startFlurry(this);
+            } else if (r < 0.64) startStrike(this, 'overhand');
+            else if (r < 0.84) startStrike(this, 'lowkick');
+            else if (r < 0.92) { c.state = 'block'; c.t = 0.36; }
+            else { c.state = 'dodge'; c.t = 0.3; }
+          }
+        } else if (this.style === 'shaolin') {
+          if (dist > 170) {
+            c.state = 'approach';
+          } else {
+            const r = Math.random();
+            if (dist > 120) {
+              if (r < 0.4) startStrike(this, 'highkick');
+              else if (r < 0.7) startStrike(this, 'roundhouse');
+              else if (r < 0.88) startStrike(this, 'teep');
+              else c.state = 'approach';
+            } else if (dist > 96) {
+              if (r < 0.35) startStrike(this, 'overhand');
+              else if (r < 0.6) startStrike(this, 'roundhouse');
+              else if (r < 0.78) startStrike(this, 'teep');
+              else if (r < 0.9) { c.state = 'block'; c.t = 0.38; }
+              else { c.state = 'dodge'; c.t = 0.3; }
+            } else {
+              const r = Math.random();
+              if (r < 0.28) startStrike(this, 'knee');
+              else if (r < 0.55) startStrike(this, 'elbow');
+              else if (r < 0.75) startStrike(this, 'overhand');
+              else if (r < 0.9) { c.state = 'block'; c.t = 0.42; }
+              else { c.state = 'dodge'; c.t = 0.3; }
+            }
           }
         } else {
           const r = Math.random();
@@ -2676,8 +3139,7 @@ import { Level } from './level.js';
       const headR = this.headR * s;
       const f = this.facing;
       const b = this.behavior;
-      const crawling = b === 'crawl' && !this.dragging && !this.fighting;
-      const hipY = (crawling ? -14 : -39.5) * s;
+      const hipY = -39.5 * s;
 
       let lean = 0;
       let reactHold = 0, reactSettle = 0, reactWobble = 0;
@@ -2686,11 +3148,10 @@ import { Level } from './level.js';
         lean = (0.34 + speedK * 0.08) * f;
       }
       else if (b === 'walk') lean = 0.06 * f;
-      else if (b === 'crawl') lean = 1.4 * f;
       else if (b === 'jump') lean = 0.1 * f;
       if (this.dragging) lean = 0.05 * f;
       else if (this.pushAnim > 0) lean = 0.32 * f;
-      else if (this.fighting) {
+      else if (this.fighting && !this.introRunning) {
         const cs = this.combat.state;
         if (cs === 'punch') lean = 0.2 * f;
         else if (cs === 'kick') lean = -0.12 * f;
@@ -2717,13 +3178,34 @@ import { Level } from './level.js';
         else if (cs === 'sweep') lean = 0.5 * f;
         else if (cs === 'uppercut') lean = 0.08 * f;
         else if (cs === 'combo') lean = 0.18 * f;
+        else if (cs === 'flurry') {
+          const e = FLURRY_TOTAL - this.combat.t;
+          const fin = FLURRY_MOVES[FLURRY_MOVES.length - 1];
+          const fp = smoothstep(fin.at - 0.10, fin.at + 0.04, e);
+          lean = (0.1 + fp * 0.22 + Math.sin(e * 24) * 0.015) * f;
+        }
         else if (cs === 'strike') {
           const move = this.combat.move;
           if (move === 'teep') lean = -0.18 * f;
           else if (move === 'roundhouse') lean = -0.06 * f;
           else if (move === 'lowkick') lean = 0.08 * f;
+          else if (move === 'highkick') {
+            const e = STRIKES.highkick.total - this.combat.t;
+            const hk = smoothstep(0.12, 0.30, e) * (1 - smoothstep(0.40, 0.60, e));
+            lean = -(0.06 + hk * 0.30) * f;
+          }
+          else if (move === 'burst') {
+            const e = STRIKES.burst.total - this.combat.t;
+            lean = (0.04 - smoothstep(0.02, 0.12, e) * 0.16 + smoothstep(0.16, 0.28, e) * 0.28) * f;
+          }
           else if (move === 'chainpunch' || move === 'elbow') lean = 0.2 * f;
           else if (move === 'knee') lean = 0.12 * f;
+          else if (move === 'superman') {
+            const e = STRIKES.superman.total - this.combat.t;
+            lean = (0.04 + smoothstep(0.10, 0.20, e) * 0.16 - smoothstep(0.34, 0.48, e) * 0.06) * f;
+          }
+          else if (move === 'flyknee') lean = 0.2 * f;
+          else if (move === 'overhand') lean = 0.3 * f;
           else lean = 0.1 * f;
         }
         else if (cs === 'launched') lean = -0.35 * f;
@@ -2732,21 +3214,21 @@ import { Level } from './level.js';
       }
 
       let bounce = 0;
-      if (!this.dragging && !crawling) {
+      if (!this.dragging) {
         if (b === 'run') bounce = Math.abs(Math.cos(p)) * 5 * s;
         else if (b === 'walk') bounce = Math.abs(Math.cos(p)) * 1.5 * s;
       }
 
       let hip, chest, neck, head;
-      const fightingPose = (this.fighting || this.dying) && !this.dragging;
+      const fightingPose = (this.fighting || this.dying) && !this.dragging && !this.introRunning;
       const combatState = this.dying ? 'knockdown' : (fightingPose ? this.combat.state : '');
       let spineBend = clamp(-lean * 0.16, -0.09, 0.09);
-      if (combatState === 'punch' || combatState === 'combo' ||
-          (combatState === 'strike' && /chainpunch|elbow/.test(this.combat.move))) spineBend += 0.04 * f;
+      if (combatState === 'punch' || combatState === 'combo' || combatState === 'flurry' ||
+          (combatState === 'strike' && ARM_STRIKE_RE.test(this.combat.move))) spineBend += 0.04 * f;
       else if (combatState === 'block') spineBend += 0.03 * f;
       else if (combatState === 'kick' || combatState === 'sweep' || combatState === 'flyingkick' ||
-          (combatState === 'strike' && /lowkick|teep|roundhouse/.test(this.combat.move))) spineBend -= 0.04 * f;
-      if (this.landT > 0 && !crawling) {
+          (combatState === 'strike' && KICK_MOVE_RE.test(this.combat.move))) spineBend -= 0.04 * f;
+      if (this.landT > 0) {
         spineBend += f * 0.05 * clamp(this.landT / 0.4, 0, 1);
       }
       let down = 0;
@@ -2791,9 +3273,7 @@ import { Level } from './level.js';
       chest = { x: hip.x + chestLocal.x, y: hip.y + chestLocal.y };
       const neckLocal = rot(0, -torsoLen * 0.45, lean + spineBend);
       neck = { x: chest.x + neckLocal.x, y: chest.y + neckLocal.y };
-      head = crawling
-        ? { x: neck.x + f * (headR + 5), y: neck.y - 3 * s }
-        : { x: neck.x + spineBend * 7 * s, y: neck.y - headR - 6 };
+      head = { x: neck.x + spineBend * 7 * s, y: neck.y - headR - 6 };
       if (reactHold > 0) {
         head.x -= f * (2 + 5 * reactHold);
         head.y += 1.5 * reactHold + 1.5 * reactSettle;
@@ -2847,6 +3327,16 @@ import { Level } from './level.js';
           lKnee = -0.62; rKnee = -0.22;
           la = 0.58; la2 = 2.05;
           ra = 0.5; ra2 = 1.95;
+        } else if (this.style === 'mma') {
+          lHip = 0.46 + bob; rHip = -0.34;
+          lKnee = -0.58; rKnee = -0.18;
+          la = 0.62; la2 = 2.12;
+          ra = 0.56; ra2 = 2.02;
+        } else if (this.style === 'shaolin') {
+          lHip = 0.64 + bob; rHip = -0.5;
+          lKnee = -0.9; rKnee = -0.28;
+          la = 0.28; la2 = 2.25;
+          ra = 0.6; ra2 = 2.0;
         }
 
         if (cs === 'punch') {
@@ -2882,6 +3372,74 @@ import { Level } from './level.js';
             rHip = -0.32; rKnee = -0.5;
             la = lerp(-0.1, -0.9, prog); la2 = lerp(2.3, 0.5, prog);
             ra = lerp(0.6, 0.95, prog); ra2 = lerp(1.5, 1.15, prog);
+          }
+        } else if (cs === 'flurry') {
+          const e = FLURRY_TOTAL - this.combat.t;
+          let idx = -1;
+          for (let i = 0; i < FLURRY_MOVES.length; i++) {
+            if (e >= FLURRY_MOVES[i].at - 0.055) idx = i;
+          }
+          if (idx >= 0) {
+            const hit = FLURRY_MOVES[idx];
+            const punch = Math.sin(Math.PI * clamp((e - hit.at + 0.055) / 0.11, 0, 1));
+            const lead = hit.side === 'lead';
+            const bodyShot = hit.aim === 'body';
+            if (hit.kind === 'jab' || hit.kind === 'cross') {
+              const armA = bodyShot ? 1.25 : 2.30;
+              if (lead) {
+                la = lerp(0.62, armA, punch); la2 = lerp(2.12, 0.03, punch);
+                ra = lerp(0.56, 0.62, punch); ra2 = lerp(2.02, 2.2, punch);
+              } else {
+                ra = lerp(0.56, armA, punch); ra2 = lerp(2.02, 0.03, punch);
+                la = lerp(0.62, 0.7, punch); la2 = lerp(2.12, 2.3, punch);
+              }
+              if (bodyShot) {
+                lHip = lerp(0.46, 0.58, punch);
+                lKnee = lerp(-0.58, -0.74, punch);
+                rKnee = lerp(-0.18, -0.34, punch);
+              }
+            } else if (hit.kind === 'hook') {
+              if (lead) {
+                la = lerp(0.62, 1.98, punch); la2 = lerp(2.12, 1.35, punch);
+                ra = 0.56; ra2 = 2.02;
+              } else {
+                ra = lerp(0.56, 1.96, punch); ra2 = lerp(2.02, 1.36, punch);
+                la = 0.62; la2 = 2.12;
+              }
+              lHip = lerp(0.46, 0.52, punch);
+            } else if (hit.kind === 'body') {
+              ra = lerp(0.56, 1.0, punch); ra2 = lerp(2.02, 0.95, punch);
+              la = 0.62; la2 = 2.12;
+              lHip = lerp(0.46, 0.5, punch);
+              lKnee = lerp(-0.58, -0.8, punch);
+              rKnee = lerp(-0.18, -0.34, punch);
+            } else if (hit.kind === 'uppercut') {
+              const armA = bodyShot ? 1.15 : (lead ? 2.15 : 2.2);
+              const elbowA = bodyShot ? 0.5 : 0.35;
+              if (lead) {
+                la = lerp(0.62, armA, punch); la2 = lerp(2.12, elbowA, punch);
+                ra = 0.56; ra2 = 2.02;
+              } else {
+                ra = lerp(0.56, armA, punch); ra2 = lerp(2.02, elbowA, punch);
+                la = 0.62; la2 = 2.12;
+              }
+              if (bodyShot) {
+                lHip = lerp(0.46, 0.58, punch);
+                rHip = lerp(-0.34, -0.30, punch);
+                lKnee = lerp(-0.58, -0.72, punch);
+                rKnee = lerp(-0.18, -0.30, punch);
+              } else {
+                lHip = lerp(0.46, 0.3, punch);
+                rHip = lerp(-0.34, -0.22, punch);
+                lKnee = lerp(-0.58, -0.35, punch);
+              }
+            } else if (hit.kind === 'overhand') {
+              ra = lerp(0.56, 2.35, punch); ra2 = lerp(2.02, -0.35, punch);
+              la = 0.62; la2 = 2.12;
+              lHip = lerp(0.46, 0.36, punch);
+              lKnee = lerp(-0.58, -0.68, punch);
+              rKnee = lerp(-0.18, -0.32, punch);
+            }
           }
         } else if (cs === 'flyingkick') {
           const elapsed = 0.85 - this.combat.t;
@@ -2931,6 +3489,11 @@ import { Level } from './level.js';
             rHip = -0.36; rKnee = -0.3;
             la = 0.85; la2 = 2.4;
             ra = 0.78; ra2 = 2.5;
+          } else if (this.style === 'shaolin') {
+            lHip = 0.58; lKnee = -0.8;
+            rHip = -0.44; rKnee = -0.26;
+            la = 0.8; la2 = 2.45;
+            ra = 0.72; ra2 = 2.5;
           } else {
             lHip = 0.4; lKnee = -0.9;
             rHip = -0.35; rKnee = -0.3;
@@ -2942,7 +3505,17 @@ import { Level } from './level.js';
           const m = STRIKES[move];
           if (m) {
             const e = m.total - this.combat.t;
-            if (move === 'chainpunch') {
+            if (move === 'burst') {
+              const coil = smoothstep(0, 0.10, e) * (1 - smoothstep(0.12, 0.20, e));
+              const dash = smoothstep(0.16, 0.28, e) * (1 - smoothstep(0.42, 0.60, e));
+              const punch = smoothstep(0.28, 0.36, e) * (1 - smoothstep(0.38, 0.54, e));
+              la = lerp(0.34, 2.30, punch); la2 = lerp(1.85, 0.03, punch);
+              ra = 0.42; ra2 = 1.75;
+              lHip = 0.36 + coil * 0.18 + dash * 0.10;
+              lKnee = -0.52 - coil * 0.30 - dash * 0.10;
+              rHip = -0.28 - coil * 0.10;
+              rKnee = -0.20 - coil * 0.25;
+            } else if (move === 'chainpunch') {
               const step = Math.min(2, Math.floor(e / 0.14));
               const local = clamp((e - step * 0.14) / 0.14, 0, 1);
               const punch = Math.sin(Math.PI * local);
@@ -2976,10 +3549,21 @@ import { Level } from './level.js';
               rHip = -0.3; rKnee = -0.35;
               la = lerp(0.34, -0.9, kick); la2 = lerp(1.85, 0.35, kick);
               ra = lerp(0.42, 0.95, kick); ra2 = lerp(1.75, 1.15, kick);
+            } else if (move === 'highkick') {
+              const chamber = smoothstep(0.04, 0.15, e) * (1 - smoothstep(0.34, 0.56, e));
+              const kick = smoothstep(0.15, 0.30, e) * (1 - smoothstep(0.40, 0.62, e));
+              rHip = lerp(-0.30, 1.05, chamber);
+              rKnee = lerp(-0.30, -1.55, chamber);
+              rHip = lerp(rHip, 2.30, kick);
+              rKnee = lerp(rKnee, -0.12, kick);
+              lHip = lerp(0.36, 0.28, kick);
+              lKnee = lerp(-0.52, -0.62, kick);
+              la = lerp(0.34, -0.55, kick); la2 = lerp(1.85, 0.55, kick);
+              ra = lerp(0.42, 0.95, kick); ra2 = lerp(1.75, 1.15, kick);
             } else if (move === 'knee') {
               const knee = smoothstep(0.04, 0.14, e) * (1 - smoothstep(0.2, 0.36, e));
               lHip = lerp(0.36, 1.35, knee);
-              lKnee = lerp(-0.6, 1.05, knee);
+              lKnee = lerp(-0.6, -1.55, knee);
               rHip = -0.3; rKnee = -0.2;
               la = lerp(0.34, 1.1, knee); la2 = lerp(1.85, 0.5, knee);
               ra = lerp(0.42, 1.2, knee); ra2 = lerp(1.75, 0.4, knee);
@@ -2989,6 +3573,63 @@ import { Level } from './level.js';
               la = lerp(0.34, 0.9, elbow); la2 = lerp(1.85, 1.6, elbow);
               lHip = 0.36; rHip = -0.28;
               lKnee = -0.52; rKnee = -0.2;
+            } else if (move === 'superman') {
+              // GSP-style lead-hand Superman: lead low-kick feint, switch step,
+              // then a straight lead while the rear hand stays by the chin.
+              const feint = smoothstep(0.02, 0.08, e) * (1 - smoothstep(0.10, 0.15, e));
+              const switchStep = smoothstep(0.11, 0.18, e);
+              const land = smoothstep(0.34, 0.46, e);
+              const punch = smoothstep(0.18, 0.30, e) * (1 - smoothstep(0.34, 0.50, e));
+
+              // Lead/left leg: lifts like a low kick, then kicks back under the body.
+              lHip = lerp(0.46, 1.02, feint);
+              lKnee = lerp(-0.58, -1.18, feint);
+              lHip = lerp(lHip, -0.52, switchStep);
+              lKnee = lerp(lKnee, -0.20, switchStep);
+              lHip = lerp(lHip, 0.30, land);
+              lKnee = lerp(lKnee, -0.26, land);
+
+              // Rear/right leg: planted during the feint, then drives forward.
+              rHip = lerp(-0.34, -0.30, feint);
+              rKnee = lerp(-0.18, -0.24, feint);
+              rHip = lerp(rHip, 0.56, switchStep);
+              rKnee = lerp(rKnee, -0.62, switchStep);
+              rHip = lerp(rHip, -0.28, land);
+              rKnee = lerp(rKnee, -0.20, land);
+
+              // Lead-hand straight, rear hand tight to the chin.
+              la = lerp(0.50, 1.44, punch);
+              la2 = lerp(2.20, 0.06, punch);
+              ra = lerp(0.42, 0.54, punch);
+              ra2 = lerp(2.35, 2.30, punch);
+            } else if (move === 'flyknee') {
+              const fly = smoothstep(0.08, 0.18, e);
+              const knee = smoothstep(0.19, 0.27, e) * (1 - smoothstep(0.32, 0.5, e));
+              const settle = smoothstep(0.5, 0.68, e);
+
+              // Knee angles stay negative so the shin folds behind the thigh.
+              lHip = 0.85 + fly * 0.65 + knee * 0.1;
+              lKnee = -1.2 - fly * 0.55 - knee * 0.15;
+              rHip = 0.6 - fly * 1.15;
+              rKnee = -1.3 + fly * 0.95;
+
+              lHip = lerp(lHip, 0.42, settle);
+              lKnee = lerp(lKnee, -0.55, settle);
+              rHip = lerp(rHip, -0.28, settle);
+              rKnee = lerp(rKnee, -0.2, settle);
+
+              la = 0.5 - fly * 0.75;
+              la2 = 2.2 - fly * 1.75;
+              ra = 0.45 - fly * 0.55;
+              ra2 = 2.2 - fly * 1.7;
+            } else if (move === 'overhand') {
+              const wind = smoothstep(0.0, 0.1, e);
+              const chop = smoothstep(0.12, 0.2, e) * (1 - smoothstep(0.28, 0.46, e));
+              ra = 0.6 + wind * 1.15 - chop * 0.5;
+              ra2 = 1.5 + wind * 1.05 - chop * 2.35;
+              la = 0.6; la2 = 2.15;
+              lHip = 0.5 + chop * 0.12; rHip = -0.45;
+              lKnee = -0.7 - chop * 0.1; rKnee = -0.1;
             }
           }
         } else if (cs === 'stagger') {
@@ -3054,16 +3695,8 @@ import { Level } from './level.js';
         ra = 0.35 + sw * 0.82;
         la2 = 1.15 + Math.max(0, -sw) * 0.24;
         ra2 = 1.15 + Math.max(0, sw) * 0.24;
-      } else if (b === 'crawl') {
-        la = 1.15 + Math.sin(p) * 0.45;
-        ra = 1.15 + Math.sin(p + Math.PI) * 0.45;
-        la2 = 0; ra2 = 0;
-        lHip = -(1.0 + Math.sin(p) * 0.35);
-        rHip = -(1.0 + Math.sin(p + Math.PI) * 0.35);
-        lKnee = -(clamp(Math.sin(p + Math.PI) * 0.5 + 0.35, 0, 0.9) - lHip);
-        rKnee = -(clamp(Math.sin(p) * 0.5 + 0.35, 0, 0.9) - rHip);
       } else if (b === 'jump') {
-        const airborne = this.y < H - 72 - 2;
+        const airborne = this.y < (this.surfaceY ?? this.y) - 2;
         if (airborne || this.vy !== 0) {
           if (this.vy < -120) {
             la = 2.65; ra = 2.45;
@@ -3143,12 +3776,6 @@ import { Level } from './level.js';
       const upperArm = 21 * s, lowerArm = 19 * s;
       const upperLeg = 22 * s, lowerLeg = 22 * s;
 
-      function limb(origin, a1, a2, l1, l2) {
-        const j = { x: origin.x + Math.sin(a1) * l1, y: origin.y + Math.cos(a1) * l1 };
-        const e = { x: j.x + Math.sin(a1 + a2) * l2, y: j.y + Math.cos(a1 + a2) * l2 };
-        return [origin, j, e];
-      }
-
       const shoulder = lerpPt(chest, neck, 0.35);
       const shoulderF = { x: shoulder.x + f * 2.4 * s, y: shoulder.y + 0.6 * s };
       const shoulderB = { x: shoulder.x - f * 2.4 * s, y: shoulder.y - 0.6 * s };
@@ -3165,39 +3792,29 @@ import { Level } from './level.js';
 
       let armL, armR, legL, legR;
 
-      if (crawling) {
-        const a = Math.sin(p);
-        const b2 = Math.sin(p + Math.PI);
-        armL = [shoulderB,
-          { x: shoulderB.x + f * (13 + a * 8) * s, y: -9 * s },
-          { x: shoulderB.x + f * (28 + a * 17) * s, y: -4 * s }];
-        armR = [shoulderF,
-          { x: shoulderF.x + f * (13 + b2 * 8) * s, y: -9 * s },
-          { x: shoulderF.x + f * (28 + b2 * 17) * s, y: -4 * s }];
-        legL = [hipB,
-          { x: -f * (17 + b2 * 7) * s, y: (-11 - Math.max(0, b2) * 4) * s },
-          { x: -f * (33 + b2 * 11) * s, y: (-4 - Math.max(0, b2) * 8) * s }];
-        legR = [hipF,
-          { x: -f * (17 + a * 7) * s, y: (-11 - Math.max(0, a) * 4) * s },
-          { x: -f * (33 + a * 11) * s, y: (-4 - Math.max(0, a) * 8) * s }];
-      } else {
-        armL = limb(shoulderB, la * f, la2 * f, upperArm, lowerArm);
-        armR = limb(shoulderF, ra * f, ra2 * f, upperArm, lowerArm);
-        legL = limb(hipB, lHip * f, lKnee * f, upperLeg, lowerLeg);
-        legR = limb(hipF, rHip * f, rKnee * f, upperLeg, lowerLeg);
-      }
+      armL = limb(shoulderB, la * f, la2 * f, upperArm, lowerArm);
+      armR = limb(shoulderF, ra * f, ra2 * f, upperArm, lowerArm);
+      legL = limb(hipB, lHip * f, lKnee * f, upperLeg, lowerLeg);
+      legR = limb(hipF, rHip * f, rKnee * f, upperLeg, lowerLeg);
 
       let footStyleL = 'flat', footStyleR = 'flat';
-      if (crawling) {
-        footStyleL = footStyleR = 'back';
-      } else if (this.blown) {
+      if (this.blown) {
         footStyleL = footStyleR = this.blown.phase === 'getup' ? 'flat' : 'point';
       } else if (fightingPose) {
         const cs = this.combat.state;
         if (cs === 'kick' || (cs === 'combo' && (this.combat.comboStep || 0) === 2)) footStyleL = 'point';
         if (cs === 'flyingkick' || cs === 'spinkick' || cs === 'sweep') footStyleL = footStyleR = 'point';
         if (cs === 'launched' || cs === 'knockdown') footStyleL = footStyleR = 'point';
-        if (cs === 'strike' && /lowkick|teep|roundhouse/.test(this.combat.move)) footStyleL = 'point';
+        if (cs === 'strike' && KICK_MOVE_RE.test(this.combat.move)) footStyleL = 'point';
+        if (cs === 'strike' && this.combat.move === 'highkick') { footStyleL = 'flat'; footStyleR = 'point'; }
+        if (cs === 'strike' && this.combat.move === 'superman') {
+          const e = STRIKES.superman.total - this.combat.t;
+          if (e < 0.16) footStyleL = 'point';
+          if (this.combat.leaped && !this.combat.leapLanded) {
+            footStyleL = 'point';
+            footStyleR = 'point';
+          }
+        }
       } else if (b === 'run') {
         if (lKnee < -0.9) footStyleL = 'point';
         if (rKnee < -0.9) footStyleR = 'point';
@@ -3205,26 +3822,19 @@ import { Level } from './level.js';
         if (lKnee < -0.65) footStyleL = 'point';
         if (rKnee < -0.65) footStyleR = 'point';
       } else if (b === 'jump') {
-        const airborne = this.y < H - 72 - 2;
+        const airborne = this.y < (this.surfaceY ?? this.y) - 2;
         if (airborne) footStyleL = footStyleR = 'point';
       }
 
       const footLen = 7.5 * s;
-      function toeFor(ankle, style) {
-        let ang = f * Math.PI * 0.5;
-        if (style === 'point') ang = f * (Math.PI * 0.5 - 0.55);
-        else if (style === 'flex') ang = f * (Math.PI * 0.5 + 0.3);
-        else if (style === 'back') ang = f * Math.PI * 1.5;
-        return { x: ankle.x + Math.sin(ang) * footLen, y: ankle.y + Math.cos(ang) * footLen };
-      }
       const extendHand = pts => ({
         x: pts[2].x + (pts[2].x - pts[1].x) * 0.05,
         y: pts[2].y + (pts[2].y - pts[1].y) * 0.05
       });
       const handL = extendHand(armL);
       const handR = extendHand(armR);
-      const toeL = toeFor(legL[2], footStyleL);
-      const toeR = toeFor(legR[2], footStyleR);
+      const toeL = toeFor(legL[2], footStyleL, f, footLen);
+      const toeR = toeFor(legR[2], footStyleR, f, footLen);
 
       return { head, neck, chest, hip, armL, armR, legL, legR, handL, handR, toeL, toeR, headR, s, f };
     }
@@ -3406,8 +4016,7 @@ import { Level } from './level.js';
     drawSpeedLines(ctx, pose) {
       const f = this.facing;
       const cs = this.fighting ? this.combat.state : '';
-      const attacking = cs === 'punch' || cs === 'kick' || cs === 'combo' || cs === 'sweep' ||
-        cs === 'uppercut' || cs === 'flyingkick' || cs === 'spinkick' || cs === 'strike';
+      const attacking = ATTACK_STATES.has(cs);
       const running = !this.fighting && this.behavior === 'run' && !this.dragging;
       if (!running && !attacking) return;
 
@@ -3463,7 +4072,7 @@ import { Level } from './level.js';
       if (reduceMotion) return;
       const cs = this.fighting ? this.combat.state : '';
       const totals = {
-        punch: 0.35, kick: 0.45, combo: 0.95,
+        punch: 0.35, kick: 0.45, combo: 0.95, flurry: FLURRY_TOTAL,
         sweep: 0.5, uppercut: 0.48, flyingkick: 0.85, spinkick: 0.55
       };
       const total = cs === 'strike' ? (STRIKES[this.combat.move]?.total || 0) : totals[cs];
@@ -3475,6 +4084,17 @@ import { Level } from './level.js';
         if (step === 0) { start = 0.04; end = 0.22; limb = pose.armR; tip = pose.handR; }
         else if (step === 1) { start = 0.3; end = 0.46; limb = pose.armL; tip = pose.handL; }
         else { start = 0.58; end = 0.8; limb = pose.legL; tip = pose.toeL; }
+      } else if (cs === 'flurry') {
+        const e = FLURRY_TOTAL - this.combat.t;
+        let idx = 0;
+        for (let i = 0; i < FLURRY_MOVES.length; i++) {
+          if (e >= FLURRY_MOVES[i].at - 0.055) idx = i;
+        }
+        const h = FLURRY_MOVES[idx];
+        start = Math.max(0.02, h.at - 0.055);
+        end = h.at + 0.055;
+        if (h.side === 'lead') { limb = pose.armL; tip = pose.handL; }
+        else { limb = pose.armR; tip = pose.handR; }
       } else if (cs === 'punch') {
         start = 0.08; end = 0.23; limb = pose.armR; tip = pose.handR;
       } else if (cs === 'kick') {
@@ -3491,7 +4111,13 @@ import { Level } from './level.js';
         const hit = m.hits[0];
         start = hit.at - 0.06;
         end = hit.at + 0.1;
-        if (this.combat.move === 'chainpunch' || this.combat.move === 'elbow') {
+        if (this.combat.move === 'superman') {
+          limb = pose.armL; tip = pose.handL;
+        } else if (this.combat.move === 'highkick') {
+          limb = pose.legR; tip = pose.toeR;
+        } else if (this.combat.move === 'burst') {
+          limb = pose.armL; tip = pose.handL;
+        } else if (ARM_STRIKE_RE.test(this.combat.move)) {
           limb = pose.armR; tip = pose.handR;
         } else {
           limb = pose.legL; tip = pose.toeL;
@@ -3519,6 +4145,38 @@ import { Level } from './level.js';
           base + sweep * 0.5 + i * 0.03
         );
         ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    drawDizzyStars(ctx, head, headR) {
+      if (this.dizzyT <= 0) return;
+      const fade = clamp(this.dizzyT / DIZZY_FADE, 0, 1);
+      const baseAlpha = ctx.globalAlpha;
+      const count = reduceMotion ? 3 : 4;
+      const rx = headR * 1.9;
+      const ry = headR * 0.62;
+      ctx.save();
+      ctx.translate(head.x, head.y - headR * 0.15);
+      ctx.lineJoin = 'round';
+      for (let i = 0; i < count; i++) {
+        const a = (reduceMotion ? 0 : this.dizzyPhase) + (i / count) * Math.PI * 2;
+        const depth = 0.72 + 0.28 * Math.sin(a);
+        const twinkle = reduceMotion ? 1 : 0.82 + 0.18 * Math.sin(this.dizzyPhase * 1.7 + i * 1.9);
+        const sx = Math.cos(a) * rx;
+        const sy = Math.sin(a) * ry;
+        ctx.globalAlpha = baseAlpha * fade * depth;
+        starPath(ctx, sx, sy, 5.6 * twinkle, 2.5 * twinkle, a * 1.4);
+        ctx.fillStyle = '#ffd54f';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(27, 26, 23, 0.8)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.globalAlpha = baseAlpha * fade * depth * 0.8;
+        ctx.fillStyle = '#fff8dc';
+        ctx.beginPath();
+        ctx.arc(sx - 1, sy - 1, 0.9 * twinkle, 0, Math.PI * 2);
+        ctx.fill();
       }
       ctx.restore();
     }
@@ -3597,6 +4255,8 @@ import { Level } from './level.js';
         }
         ctx.restore();
       }
+
+      this.drawDizzyStars(ctx, head, headR);
 
       if (this.fighting && this.combat.spin) {
         ctx.translate(0, hip.y);
@@ -3739,16 +4399,12 @@ import { Level } from './level.js';
     hit(px, py) {
       const dx = px - this.x;
       const dy = py - this.y;
-      const pose = this.pose();
+      const pose = this._renderPose || this.pose();
       const hx = this.x + pose.head.x;
       const hy = this.y + pose.head.y;
       const headHit = Math.hypot(px - hx, py - hy) < pose.headR + 8;
       if (headHit) return true;
-      const crawling = this.behavior === 'crawl' && !this.dragging && !this.fighting;
-      if (crawling) {
-        const df = dx * this.facing;
-        if (df > -45 && df < 72 && dy > -45 && dy < 8) return true;
-      } else if (Math.abs(dx) < 28 && dy > -100 && dy < 8) return true;
+      if (Math.abs(dx) < 28 && dy > -100 && dy < 8) return true;
       const fl = pose.legL[2], fr = pose.legR[2];
       if (Math.hypot(px - (this.x + fl.x), py - (this.y + fl.y)) < 14) return true;
       if (Math.hypot(px - (this.x + fr.x), py - (this.y + fr.y)) < 14) return true;
@@ -3760,7 +4416,7 @@ import { Level } from './level.js';
     }
 
     bounds() {
-      const p = this.pose();
+      const p = this._renderPose || this.pose();
       const pts = [p.head, p.neck, p.chest, p.hip, ...p.armL, ...p.armR, p.handL, p.handR, ...p.legL, ...p.legR, p.toeL, p.toeR];
       let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
       for (const pt of pts) {
@@ -3778,7 +4434,7 @@ import { Level } from './level.js';
   }
 
   function makeBubble(text, life = 2.6) {
-    return { text, age: 0, life };
+    return { text, age: 0, life, lines: null, width: 0 };
   }
 
   function cancelChat() {
@@ -3800,55 +4456,51 @@ import { Level } from './level.js';
     if (chat && (chat.a === f || chat.b === f)) cancelChat();
   }
 
-  function findChatPair() {
-    if (!autonChk.checked || fightPick) return null;
-    const eligible = figures.filter(f =>
-      !f.chatting && !f.fighting && !f.pursuit && !f.pursuedBy &&
+  function chatEligible(f) {
+    return !f.chatting && !f.fighting && !f.pursuit && !f.pursuedBy &&
       !f.blown && !f.dragging && !f.spectating && !f.dying &&
       f.behavior !== 'jump' &&
       f.chatCd <= 0 && f.vy === 0 &&
       level.floorAt(f.x, f.y) >= 0 && !level.isOnStairs(f.x) &&
-      Math.abs(f.y - level.surfaceAt(f.x, f.y)) <= 18
-    );
+      Math.abs(f.y - level.surfaceAt(f.x, f.y)) <= 18;
+  }
+
+  function collectChatPairs(minD, maxD, filter) {
+    const candidates = [];
+    for (const f of figures) {
+      if (!chatEligible(f)) continue;
+      candidates.push({ f, floor: level.floorAt(f.x, f.y) });
+    }
     const pairs = [];
-    for (let i = 0; i < eligible.length; i++) {
-      for (let j = i + 1; j < eligible.length; j++) {
-        const a = eligible[i];
-        const b = eligible[j];
-        if (level.floorAt(a.x, a.y) !== level.floorAt(b.x, b.y)) continue;
-        const d = Math.abs(a.x - b.x);
-        if (d >= 80 && d <= 260) pairs.push([a, b]);
+    for (let i = 0; i < candidates.length; i++) {
+      for (let j = i + 1; j < candidates.length; j++) {
+        const a = candidates[i];
+        const b = candidates[j];
+        if (a.floor !== b.floor) continue;
+        const d = Math.abs(a.f.x - b.f.x);
+        if (d < minD || d > maxD) continue;
+        if (filter && !filter(a.f, b.f, a.floor)) continue;
+        pairs.push([a.f, b.f]);
       }
     }
+    return pairs;
+  }
+
+  function findChatPair() {
+    if (!autonChk.checked || fightPick) return null;
+    const pairs = collectChatPairs(80, 260);
     return pairs.length ? pick(pairs) : null;
   }
 
   function findChatApproach() {
     if (!autonChk.checked || fightPick) return null;
-    const eligible = figures.filter(f =>
-      !f.chatting && !f.fighting && !f.pursuit && !f.pursuedBy &&
-      !f.blown && !f.dragging && !f.spectating && !f.dying &&
-      f.behavior !== 'jump' &&
-      f.chatCd <= 0 && f.vy === 0 &&
-      level.floorAt(f.x, f.y) >= 0 && !level.isOnStairs(f.x) &&
-      Math.abs(f.y - level.surfaceAt(f.x, f.y)) <= 18
-    );
-    const pairs = [];
-    for (let i = 0; i < eligible.length; i++) {
-      for (let j = i + 1; j < eligible.length; j++) {
-        const a = eligible[i];
-        const b = eligible[j];
-        if (level.floorAt(a.x, a.y) !== level.floorAt(b.x, b.y)) continue;
-        const d = Math.abs(a.x - b.x);
-        if (d < 120 || d > 600) continue;
-        if (level.floorAt(a.x, a.y) === 0) {
-          const mid = (a.x + b.x) / 2;
-          if (mid < level.stairX0 && Math.max(a.x, b.x) >= level.stairX0) continue;
-          if (mid > level.stairX1 && Math.min(a.x, b.x) <= level.stairX1) continue;
-        }
-        pairs.push([a, b]);
-      }
-    }
+    const pairs = collectChatPairs(120, 600, (a, b, floor) => {
+      if (floor !== 0) return true;
+      const mid = (a.x + b.x) / 2;
+      if (mid < level.stairX0 && Math.max(a.x, b.x) >= level.stairX0) return false;
+      if (mid > level.stairX1 && Math.min(a.x, b.x) <= level.stairX1) return false;
+      return true;
+    });
     return pairs.length ? pick(pairs) : null;
   }
 
@@ -3873,13 +4525,29 @@ import { Level } from './level.js';
     b.facing = -dir;
   }
 
-  function startChat(a, b) {
-    if (chat || !a || !b) return;
+  function chooseChatLine(a, b) {
     const sameStyle = a.style === b.style && STYLE_CHAT[a.style];
-    const line = sameStyle && Math.random() < 0.35
+    return sameStyle && Math.random() < 0.35
       ? pick(STYLE_CHAT[a.style])
       : pick(CHAT_SCRIPT);
-    chat = { a, b, phase: 'open', t: CHAT_OPEN, opener: line[0], reply: line[1] };
+  }
+
+  function beginChatLines(a, b) {
+    const line = chooseChatLine(a, b);
+    chat.phase = 'open';
+    chat.t = CHAT_OPEN;
+    chat.opener = line[0];
+    chat.reply = line[1];
+    a.setBehavior('idle');
+    b.setBehavior('idle');
+    a.facing = b.x < a.x ? -1 : 1;
+    b.facing = a.x < b.x ? -1 : 1;
+    a.bubble = makeBubble(line[0], CHAT_OPEN + 0.2);
+  }
+
+  function startChat(a, b) {
+    if (chat || !a || !b) return;
+    chat = { a, b, phase: 'open', t: 0, opener: null, reply: null };
     for (const f of [a, b]) {
       f.chatting = true;
       f.chatPartner = f === a ? b : a;
@@ -3889,9 +4557,7 @@ import { Level } from './level.js';
       f.think = 999;
       f.vy = 0;
     }
-    a.facing = b.x < a.x ? -1 : 1;
-    b.facing = a.x < b.x ? -1 : 1;
-    a.bubble = makeBubble(line[0], CHAT_OPEN + 0.2);
+    beginChatLines(a, b);
   }
 
   function updateChat(dt) {
@@ -3925,19 +4591,7 @@ import { Level } from './level.js';
         const arrived = Math.abs(a.x - chat.walkX) <= 4;
         if (arrived || chat.t >= CHAT_APPROACH) {
           if (arrived) {
-            const sameStyle = a.style === b.style && STYLE_CHAT[a.style];
-            const line = sameStyle && Math.random() < 0.35
-              ? pick(STYLE_CHAT[a.style])
-              : pick(CHAT_SCRIPT);
-            chat.phase = 'open';
-            chat.t = CHAT_OPEN;
-            chat.opener = line[0];
-            chat.reply = line[1];
-            a.setBehavior('idle');
-            b.setBehavior('idle');
-            a.facing = b.x < a.x ? -1 : 1;
-            b.facing = a.x < b.x ? -1 : 1;
-            a.bubble = makeBubble(line[0], CHAT_OPEN + 0.2);
+            beginChatLines(a, b);
           } else {
             cancelChat();
           }
@@ -4010,9 +4664,8 @@ import { Level } from './level.js';
   }
 
   function drawBubbles() {
-    const lb = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--letterbox-h')) || 0;
-    const topSafe = (toolbar ? toolbar.offsetHeight : 48) + (cinematicOn ? lb + 8 : 8);
-    const bottomSafe = H - (cinematicOn ? lb + 8 : 60);
+    const topSafe = toolbarHeight + (cinematicOn ? letterboxHeight + 8 : 8);
+    const bottomSafe = H - (cinematicOn ? letterboxHeight + 8 : 60);
     for (const f of figures) {
       const bubble = f.bubble;
       if (!bubble) continue;
@@ -4022,18 +4675,23 @@ import { Level } from './level.js';
         f.x + head.x,
         f.y + head.y - pose.headR - 10
       );
-      const lines = wrapBubbleText(bubble.text, 170);
+      if (!bubble.lines) {
+        const wrapped = wrapBubbleText(bubble.text, 170);
+        let textW = 0;
+        ctx.save();
+        ctx.font = '12px system-ui, -apple-system, sans-serif';
+        for (const wrappedLine of wrapped) {
+          textW = Math.max(textW, ctx.measureText(wrappedLine).width);
+        }
+        ctx.restore();
+        bubble.lines = wrapped;
+        bubble.width = Math.min(190, Math.max(54, textW + 10 * 2));
+      }
+      const lines = bubble.lines;
       const lineH = 15;
       const padX = 10;
       const padY = 8;
-      const textW = lines.reduce((max, line) => {
-        ctx.save();
-        ctx.font = '12px system-ui, -apple-system, sans-serif';
-        const w = ctx.measureText(line).width;
-        ctx.restore();
-        return Math.max(max, w);
-      }, 0);
-      const w = Math.min(190, Math.max(54, textW + padX * 2));
+      const w = bubble.width;
       const h = lines.length * lineH + padY * 2;
       const age = bubble.age;
       const pop = easeOut(Math.min(1, age / 0.12));
@@ -4204,10 +4862,7 @@ import { Level } from './level.js';
     cancelSpectating(attacker);
     cancelSpectating(target);
     for (const f of figures) if (f.pursuit) cancelPursuit(f);
-    if (fightPick) {
-      fightPick = null;
-      if (canvas.style.cursor === 'crosshair') canvas.style.cursor = 'default';
-    }
+    clearFightPick();
     attacker.pursuit = { target, t: 0, drop: false };
     target.pursuedBy = attacker;
     target.setBehavior('idle');
@@ -4223,11 +4878,15 @@ import { Level } from './level.js';
     updateUI();
   }
 
-  function cancelFightPick() {
-    if (!fightPick) return;
+  function clearFightPick() {
+    if (!fightPick) return false;
     fightPick = null;
     if (canvas && canvas.style.cursor === 'crosshair') canvas.style.cursor = 'default';
-    updateUI();
+    return true;
+  }
+
+  function cancelFightPick() {
+    if (clearFightPick()) updateUI();
   }
 
   function refreshPrimary() {
@@ -4266,22 +4925,22 @@ import { Level } from './level.js';
     const multi = sel.length > 1;
     const styles = new Set(sel.map(f => f.style));
     const styleMixed = styles.size > 1;
-    const compact = window.innerWidth <= 520;
-    const narrow = window.innerWidth <= 360;
+    const viewportW = window.innerWidth;
+    const compact = viewportW <= 520;
+    const narrow = viewportW <= 360;
     if (fightPick && (
       fightPick !== selected ||
-      fightPick.fighting || fightPick.blown || fightPick.dragging ||
+      fightPick.fighting || fightPick.blown || fightPick.dragging || fightPick.dying ||
       level.floorAt(fightPick.x, fightPick.y) < 0 ||
       fightTargetsFor(fightPick).length === 0
     )) {
-      fightPick = null;
-      if (canvas.style.cursor === 'crosshair') canvas.style.cursor = 'default';
+      clearFightPick();
     }
     const chaser = figures.find(f => f.pursuit);
     if (chaser && chaser !== selected) cancelPursuit(chaser);
     document.body.dataset.selection = has ? 'some' : 'none';
     document.body.dataset.fightPick = fightPick ? 'on' : 'off';
-    document.body.dataset.pursuit = figures.some(f => f.pursuit) ? 'on' : 'off';
+    document.body.dataset.pursuit = chaser && chaser.pursuit ? 'on' : 'off';
     if (dock) dock.inert = !has;
     for (const btn of actionButtons) {
       btn.disabled = !has;
@@ -4325,12 +4984,6 @@ import { Level } from './level.js';
       btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     }
 
-    if (blastBtn) {
-      const cd = has && selected.hasPower && selected.powerCd > 0
-        ? Math.min(1, selected.powerCd / 4) : 0;
-      blastBtn.style.setProperty('--cd', cd.toFixed(3));
-    }
-
     powerGlyph.className = '';
     if (has && selected.hasPower) {
       powerGlyph.className = selected.powerCd > 0 ? 'recharging' : 'charged';
@@ -4343,10 +4996,15 @@ import { Level } from './level.js';
 
     const flashing = performance.now() < statusFlash.until;
     colorPicker.disabled = !has;
-    if (has) colorPicker.value = rgbToHex(selected.color);
+    if (has) {
+      const hex = rgbToHex(selected.color);
+      if (colorPicker.value !== hex) colorPicker.value = hex;
+    }
+    syncPaletteActive();
 
     if (styleSelect) {
-      styleSelect.value = has ? (styleMixed ? 'mixed' : sel[0].style) : lastStyle;
+      const nextStyle = has ? (styleMixed ? 'mixed' : sel[0].style) : lastStyle;
+      if (styleSelect.value !== nextStyle) styleSelect.value = nextStyle;
       const locked = has && sel.some(f => f.fighting);
       styleSelect.disabled = !has || locked;
       styleSelect.title = !has
@@ -4357,23 +5015,25 @@ import { Level } from './level.js';
     }
 
     if (flashing) {
-      statusEl.textContent = statusFlash.text;
-      statusEl.title = statusFlash.text;
+      setStatus(statusFlash.text);
     } else if (fightPick) {
-      statusEl.textContent = compact ? 'Pick a target' : 'Pick an opponent';
-      statusEl.title = 'Pick an opponent · Esc to cancel';
+      setStatus(
+        compact ? 'Pick a target' : 'Pick an opponent',
+        'Pick an opponent · Esc to cancel'
+      );
     } else if (has && selected.pursuit) {
       const climbing = !selected.pursuit.drop && pursuitFloor(level, selected.x, selected.y) < 0;
-      statusEl.textContent = climbing
-        ? (compact ? 'Climbing' : 'Climbing…')
-        : (compact ? 'Chasing' : 'Chasing…');
-      statusEl.title = 'Chasing target · Esc to cancel';
+      setStatus(
+        climbing
+          ? (compact ? 'Climbing' : 'Climbing…')
+          : (compact ? 'Chasing' : 'Chasing…'),
+        'Chasing target · Esc to cancel'
+      );
     } else if (!has) {
       const text = figures.length
         ? (compact ? 'Click a figure' : 'Click a figure to select')
         : (compact ? 'Add a figure' : 'Add a figure to start');
-      statusEl.textContent = text;
-      statusEl.title = text;
+      setStatus(text);
     } else {
       let mode;
       if (sel.some(f => f.fighting)) {
@@ -4386,10 +5046,10 @@ import { Level } from './level.js';
       const fullText = multi
         ? `${sel.length} selected · ${mode}${suffix}`
         : `Selected · ${mode}${suffix}`;
-      statusEl.textContent = compact
-        ? (multi ? `${sel.length} selected` : `${mode}${suffix}`)
-        : fullText;
-      statusEl.title = fullText;
+      setStatus(
+        compact ? (multi ? `${sel.length} selected` : `${mode}${suffix}`) : fullText,
+        fullText
+      );
     }
   }
 
@@ -4401,6 +5061,39 @@ import { Level } from './level.js';
     const m = c.match(/\d+/g);
     if (!m) return '#e53935';
     return '#' + m.slice(0, 3).map(n => (+n).toString(16).padStart(2, '0')).join('');
+  }
+
+  function setPaletteOpen(open, returnFocus = false) {
+    if (!palettePanel || !paletteBtn) return;
+    if (open && !selected) open = false;
+    palettePanel.hidden = !open;
+    paletteBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) {
+      const active = paletteSwatches.find(b => b.getAttribute('aria-pressed') === 'true') || paletteSwatches[0];
+      if (active) active.focus();
+    } else if (returnFocus) {
+      paletteBtn.focus();
+    }
+  }
+
+  function syncPaletteActive() {
+    if (!palettePanel) return;
+    const list = selectionList();
+    const hexes = new Set(list.map(f => rgbToHex(f.color)));
+    const active = hexes.size === 1 ? [...hexes][0] : null;
+    for (const b of paletteSwatches) {
+      b.setAttribute('aria-pressed', b.dataset.color === active ? 'true' : 'false');
+    }
+    if (!list.length) setPaletteOpen(false);
+  }
+
+  function applyPaletteColor(hex) {
+    const list = selectionList();
+    if (!list.length) return;
+    for (const f of list) f.color = hex;
+    colorPicker.value = hex;
+    updateUI();
+    setPaletteOpen(false, true);
   }
 
   addBtn.addEventListener('click', () => {
@@ -4420,7 +5113,37 @@ import { Level } from './level.js';
 
   colorPicker.addEventListener('input', () => {
     for (const f of selectionList()) f.color = colorPicker.value;
+    updateUI();
   });
+
+  if (paletteBtn) {
+    paletteBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      setPaletteOpen(palettePanel.hidden);
+    });
+  }
+
+  if (palettePanel) {
+    palettePanel.addEventListener('click', e => {
+      const swatch = e.target.closest('.palette-swatch');
+      if (!swatch) return;
+      e.stopPropagation();
+      applyPaletteColor(swatch.dataset.color);
+    });
+  }
+
+  document.addEventListener('pointerdown', e => {
+    if (!palettePanel || palettePanel.hidden) return;
+    if (palettePanel.contains(e.target) || (paletteBtn && paletteBtn.contains(e.target))) return;
+    setPaletteOpen(false);
+  });
+
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape' || !palettePanel || palettePanel.hidden) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    setPaletteOpen(false, true);
+  }, true);
 
   if (styleSelect) {
     styleSelect.addEventListener('change', () => {
@@ -4430,7 +5153,7 @@ import { Level } from './level.js';
         return;
       }
       lastStyle = style;
-      try { localStorage.setItem('stickman.style', style); } catch (err) {}
+      writeStorage('stickman.style', style);
       for (const f of selectionList()) {
         if (!f.fighting) f.style = style;
       }
@@ -4533,7 +5256,7 @@ import { Level } from './level.js';
   removeBtn.addEventListener('click', removeSelectedFigures);
 
   const KEY_ACTIONS = {
-    '1': 'idle', '2': 'crawl', '3': 'walk', '4': 'run', '5': 'jump',
+    '1': 'idle', '3': 'walk', '4': 'run', '5': 'jump',
     f: 'fight', p: 'power', b: 'blast',
   };
   document.addEventListener('keydown', e => {
@@ -4656,6 +5379,7 @@ import { Level } from './level.js';
         cancelSpectating(f);
         if (f.pursuit) cancelPursuit(f);
         if (f.pursuedBy) cancelPursuit(f.pursuedBy);
+        clearDuelIntro(f);
       }
       for (const f of group) f.dragging = true;
       drag = { moved: false, sx: x, sy: y, items: group.map(f => ({ f, x: f.x, y: f.y })) };
@@ -4828,8 +5552,14 @@ import { Level } from './level.js';
       inkFlash = Math.max(0, inkFlash - rdt * 8);
     }
 
-    if (selected && selected.hasPower && selected.powerCd > 0) {
-      blastBtn.style.setProperty('--cd', Math.min(1, selected.powerCd / 4).toFixed(3));
+    if (blastBtn) {
+      const cd = selected && selected.hasPower && selected.powerCd > 0
+        ? Math.min(1, selected.powerCd / 4) : 0;
+      const next = cd.toFixed(3);
+      if (next !== lastBlastCd) {
+        blastBtn.style.setProperty('--cd', next);
+        lastBlastCd = next;
+      }
     }
     if (now - lastUITime >= 100) {
       updateUI();

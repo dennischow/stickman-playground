@@ -11,6 +11,25 @@
   <span id="brand">Stickman</span>
   <div id="selectionChip">
     <input id="colorPicker" type="color" value="#e53935" aria-label="Figure color">
+    <button id="paletteBtn" type="button" aria-label="Preset colors" aria-haspopup="true" aria-expanded="false" aria-controls="palettePanel" title="Preset colors">
+      <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <circle cx="4" cy="4" r="1.5"/><circle cx="8" cy="4" r="1.5"/><circle cx="12" cy="4" r="1.5"/>
+        <circle cx="4" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="12" cy="8" r="1.5"/>
+        <circle cx="4" cy="12" r="1.5"/><circle cx="8" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/>
+      </svg>
+    </button>
+    <div id="palettePanel" role="group" aria-label="Preset colors" hidden>
+      <button class="palette-swatch" type="button" data-color="#e53935" aria-label="Crimson" title="Crimson" style="--swatch:#e53935"></button>
+      <button class="palette-swatch" type="button" data-color="#fb8c00" aria-label="Orange" title="Orange" style="--swatch:#fb8c00"></button>
+      <button class="palette-swatch" type="button" data-color="#fdd835" aria-label="Amber" title="Amber" style="--swatch:#fdd835"></button>
+      <button class="palette-swatch" type="button" data-color="#43a047" aria-label="Green" title="Green" style="--swatch:#43a047"></button>
+      <button class="palette-swatch" type="button" data-color="#00897b" aria-label="Teal" title="Teal" style="--swatch:#00897b"></button>
+      <button class="palette-swatch" type="button" data-color="#00acc1" aria-label="Cyan" title="Cyan" style="--swatch:#00acc1"></button>
+      <button class="palette-swatch" type="button" data-color="#1e88e5" aria-label="Blue" title="Blue" style="--swatch:#1e88e5"></button>
+      <button class="palette-swatch" type="button" data-color="#8e24aa" aria-label="Purple" title="Purple" style="--swatch:#8e24aa"></button>
+      <button class="palette-swatch" type="button" data-color="#d81b60" aria-label="Pink" title="Pink" style="--swatch:#d81b60"></button>
+      <button class="palette-swatch" type="button" data-color="#6d4c41" aria-label="Brown" title="Brown" style="--swatch:#6d4c41"></button>
+    </div>
     <span id="readoutText" aria-live="polite">Add a figure to start</span>
     <span id="powerGlyph" title="Superpower"></span>
     <button id="revokeBtn" type="button" hidden title="Remove the superpower (R)" aria-label="Revoke superpower">&times;</button>
@@ -66,7 +85,6 @@
     <span class="dock-label">Motion</span>
     <div class="segmented" role="group" aria-label="Motion">
       <button type="button" data-action="idle" aria-pressed="false" title="Idle (1)">Idle</button>
-      <button type="button" data-action="crawl" aria-pressed="false" title="Crawl (2)">Crawl</button>
       <button type="button" data-action="walk" aria-pressed="false" title="Walk (3)">Walk</button>
       <button type="button" data-action="run" aria-pressed="false" title="Run (4)">Run</button>
       <button type="button" data-action="jump" aria-pressed="false" title="Jump (5)">Jump</button>
@@ -86,6 +104,8 @@
       <option value="brawler">Brawler</option>
       <option value="wingchun">Wing Chun</option>
       <option value="muaythai">Muay Thai</option>
+      <option value="mma">MMA</option>
+      <option value="shaolin">Shaolin</option>
       <option value="mixed" disabled>Mixed</option>
     </select>
   </div>

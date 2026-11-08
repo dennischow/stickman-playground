@@ -3,11 +3,14 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "node --check src/main.js && node --check src/camera.js && node --check src/audio.js && node --check src/level.js"
+    "check": "node --check src/main.js && node --check src/camera.js && node --check src/audio.js && node --check src/level.js && node --check src/constants.js && node --check src/storage.js"
   },
   "devDependencies": {
     "vite": "^7.1.7"

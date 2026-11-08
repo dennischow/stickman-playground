@@ -1,3 +1,5 @@
+import { readStorage, writeStorage } from './storage.js';
+
 const STORAGE_KEY = 'stickman.muted';
 const MASTER_GAIN = 0.55;
 
@@ -6,10 +8,7 @@ class SoundEngine {
     this.ctx = null;
     this.master = null;
     this.noiseBuf = null;
-    this.muted = false;
-    try {
-      this.muted = localStorage.getItem(STORAGE_KEY) === '1';
-    } catch (err) {}
+    this.muted = readStorage(STORAGE_KEY) === '1';
 
     if (typeof window !== 'undefined') {
       const unlock = () => this.unlock();
@@ -22,10 +21,6 @@ class SoundEngine {
         }
       });
     }
-  }
-
-  get isMuted() {
-    return this.muted;
   }
 
   unlock() {
@@ -67,9 +62,7 @@ class SoundEngine {
 
   setMuted(muted) {
     this.muted = !!muted;
-    try {
-      localStorage.setItem(STORAGE_KEY, this.muted ? '1' : '0');
-    } catch (err) {}
+    writeStorage(STORAGE_KEY, this.muted ? '1' : '0');
     if (this.master) {
       const t = this.ctx.currentTime;
       this.master.gain.cancelScheduledValues(t);
@@ -224,6 +217,24 @@ class SoundEngine {
 
   jump(pan = 0) {
     this._noise({ dur: 0.18, gain: 0.06, pan, type: 'bandpass', freq: 420, freqEnd: 1500, q: 1.2 });
+  }
+
+  leap(pan = 0, power = 1) {
+    this._noise({ dur: 0.2, gain: 0.07 * power, pan, type: 'bandpass', freq: 400, freqEnd: 1600, q: 1.2 });
+  }
+
+  supermanLaunch(pan = 0) {
+    this._noise({ dur: 0.32, gain: 0.09, pan, type: 'bandpass', freq: 320, freqEnd: 2400, q: 1.3 });
+    this._tone({ type: 'sawtooth', freq: 120, freqEnd: 520, dur: 0.3, gain: 0.04, pan });
+    this._noise({ dur: 0.14, gain: 0.07, pan, type: 'lowpass', freq: 300, freqEnd: 110, q: 0.9 });
+  }
+
+  supermanHit(pan = 0) {
+    this._tone({ type: 'sine', freq: 150, freqEnd: 26, dur: 0.5, gain: 0.4, pan });
+    this._tone({ type: 'triangle', freq: 300, freqEnd: 52, dur: 0.3, gain: 0.12, pan });
+    this._noise({ dur: 0.08, gain: 0.22, pan, type: 'highpass', freq: 2200, freqEnd: 900, q: 0.7 });
+    this._noise({ dur: 0.36, gain: 0.18, pan, type: 'lowpass', freq: 900, freqEnd: 120, q: 0.8 });
+    this._tone({ type: 'sine', freq: 70, freqEnd: 44, dur: 0.2, gain: 0.2, pan, delay: 0.05 });
   }
 
   blast(pan = 0) {

@@ -1,6 +1,6 @@
 # Stickman Playground
 
-A paper-and-ink canvas toy where procedurally animated stick figures walk, run, crawl, jump, and get into kung-fu duels — optionally with wall-blasting superpowers, synthesized sound, and comic impact effects.
+A paper-and-ink canvas toy where procedurally animated stick figures walk, run, jump, and get into kung-fu duels — optionally with wall-blasting superpowers, synthesized sound, and comic impact effects.
 
 Built with vanilla JavaScript and the Canvas 2D API, bundled with Vite. No game engine, no framework.
 
@@ -8,18 +8,18 @@ Built with vanilla JavaScript and the Canvas 2D API, bundled with Vite. No game 
 
 - **Procedural stick figures** — every pose is computed from limb angles, so motion is smooth and resolution-independent.
 - **Articulated poses** — a split hip → chest → neck spine, shoulder and hip anchors, and visible hands and feet give each stance a readable skeleton. Combat uses a chin-high guard, chambered kicks, and hip-driven punches.
-- **Motion behaviors** — idle, walk, run, crawl, and a physically simulated jump with crouch, air, and landing phases.
+- **Motion behaviors** — idle, walk, run, and a physically simulated jump with crouch, air, and landing phases.
 - **Individual movement** — each figure gets its own walk/run speed, jump height, crouch timing, and landing rest, so a crowd never moves in lockstep.
 - **Motion polish** — smoothed frame-to-frame velocity drives subtle head, torso, and arm lag; landings squash and settle; footsteps kick up dust; fast strikes leave short smear arcs. All of it respects `prefers-reduced-motion`.
 - **Autonomous mode** — figures randomly switch actions on their own, each with a randomized "think" timer.
-- **Ambient chatter** — idle figures on the same floor occasionally face each other and trade a short speech-bubble exchange, with style-specific lines for Wing Chun, Muay Thai, and Brawler. A figure may also walk over to start the conversation. Only one conversation runs at a time.
+- **Ambient chatter** — idle figures on the same floor occasionally face each other and trade a short speech-bubble exchange, with style-specific lines for Wing Chun, Muay Thai, MMA, and Brawler. A figure may also walk over to start the conversation. Only one conversation runs at a time.
 - **Fight spectators** — bystanders on the same floor sometimes wander over to watch a duel, comment on the action, and drift back to their own business when it ends.
 - **Living sky** — the paper sky carries a sun and moon on a local 24-hour orbit, plus occasional drifting bird flocks. Night is a deep blue-violet, the celestial bodies fade near the horizon, and the birds thin out at night.
-- **Kung-fu combat** — AI duels with approach, block, dodge, punch, kick, combo, spin kick, sweep, uppercut, flying kick, stagger, knockdown, launch, and get-up states. Hits use natural recoil poses and knockdowns fall, settle, and push back up continuously.
-- **Health and defeat** — fighters carry a small health bar above their heads; blocks and dodges avoid damage, and a fighter at zero HP falls, lies for two seconds, rises like an angel with a halo and wings, fades out, and is removed.
-- **Fighting styles** — each figure can switch between Brawler, Wing Chun, and Muay Thai. Wing Chun uses a centerline guard, chain punches, low heel kicks, and a compact parry; Muay Thai uses teep, roundhouse, knee, and elbow. Styles change guard poses, attack timing and range, and AI distance preferences.
+- **Kung-fu combat** — AI duels with approach, block, dodge, punch, kick, combo, 12-punch flurry, spin kick, sweep, uppercut, flying kick, stagger, knockdown, launch, and get-up states. Hits use natural recoil poses and knockdowns fall, settle, and push back up continuously.
+- **Health and defeat** — fighters carry a small health bar above their heads; blocks and dodges avoid damage, and a fighter at zero HP falls, lies for two seconds, rises like an angel with a halo and wings, fades out, and is removed. A survivable knockdown shows `DOWN!` and orbiting dizzy stars; only a fatal hit shows `K.O.`.
+- **Fighting styles** — each figure can switch between Brawler, Wing Chun, Muay Thai, MMA, and Shaolin. Wing Chun uses a centerline guard, chain punches, a short back-hop burst straight, low heel kicks, and a compact parry; Muay Thai uses teep, roundhouse, knee, and elbow; MMA fights from a bladed lead stance and mixes a GSP-style lead-hand Superman punch, flying knee, high kick to the head, overhand right, low kick, a stop-hit burst straight, lead finger jab and chain punches, side and high kicks, low lead kicks, and a fast 12-punch combination at close range that alternates head and body shots; Shaolin uses a deep horse stance, tiger/crane palms, whirlwind high kicks, and close knees and elbows. Styles change guard poses, attack timing and range, and AI distance preferences.
 - **Superpower** — give a figure the power with a toggle, then blast the nearest figure into the wall with knockback, slow-motion, impact typography, ink splats, and screen shake. Blasting a fighter also takes 20 HP off their health bar. Toggle the power off at any time, or press `R`.
-- **Comic impact feel** — sprite-based dust and ink, persistent ground splats, starbursts, manga sound-effect words (`BAM`, `WHACK`, `K.O.`, `BOOM`), tinted flashes, and hit-stop.
+- **Comic impact feel** — sprite-based dust and ink, persistent ground splats, starbursts, manga sound-effect words (`BAM`, `WHACK`, `DOWN!`, `K.O.`, `BOOM`) that fade out early so they never hide the action, tinted flashes, and hit-stop.
 - **Synthesized audio** — a small WebAudio engine generates whooshes, impacts, footsteps, jumps, landings, blasts, and K.O. sounds. No audio files, with stereo panning by on-screen position and a persisted mute setting.
 - **Cinematic camera** — a damped camera adds gentle idle framing, duel intro push-in, fight follow, K.O. focus, death rise, and blast tracking, with letterbox bars and a persisted toggle. Pointer input is inverse-transformed, so selection and dragging stay accurate while the camera moves.
 - **Multi-level stage** — a paper/ink mezzanine and staircase give the playground vertical space: figures climb stairs, jump between floors, fall off edges, and can be dragged onto either level. Duels lock to one floor once they start; challenging someone across floors sends the attacker up or down the stairs — or off the mezzanine edge — first.
@@ -31,7 +31,7 @@ Built with vanilla JavaScript and the Canvas 2D API, bundled with Vite. No game 
 
 ## Getting Started
 
-Requires Node.js 18+.
+Requires Node.js 20.19+ or 22.12+.
 
 ```bash
 npm install
@@ -64,7 +64,6 @@ npm run check     # syntax-check the JavaScript modules
 | --- | --- |
 | `A` | Add a stick figure |
 | `1` | Idle |
-| `2` | Crawl |
 | `3` | Walk |
 | `4` | Run |
 | `5` | Jump |
@@ -83,9 +82,9 @@ The top bar holds the always-relevant controls: **Add**, **Autonomous**, **Scene
 
 Selection actions live in a floating dock at the bottom of the screen. It appears whenever a figure is selected and sits inside the cinematic letterbox bar when cinematic mode is on:
 
-- **Motion** — set the selection to Idle, Crawl, Walk, Run, or Jump.
+- **Motion** — set the selection to Idle, Walk, Run, or Jump.
 - **Combat** — start/stop a duel, pick among several enemies, chase someone on another floor, toggle the superpower on or off, and blast with it.
-- **Style** — choose Brawler, Wing Chun, or Muay Thai for the selection. Mixed selections show **Mixed**, the selector locks during a duel, and new figures inherit the last chosen style.
+- **Style** — choose Brawler, Wing Chun, Muay Thai, MMA, or Shaolin for the selection. Mixed selections show **Mixed**, the selector locks during a duel, and new figures inherit the last chosen style.
 
 ## How It Works
 
@@ -111,7 +110,7 @@ The scene is rendered once to an offscreen canvas on resize, scene change, or lo
 
 Idle uses a relaxed contrapposto with asymmetric knees and separated arms. Walk plants the front foot with a heel/toe stroke; run adds a flight phase, pointed feet, and stronger arm drive. Jump poses cover crouch, airborne extension, and a compressed landing. Combat stances use staggered feet, a chin-high guard, chambered knees, hip rotation into punches, and counterbalancing arms. These are visual poses only: hit ranges, timings, knockback, and AI balance are unchanged.
 
-Gravity is a constant `1500 px/s²`. Horizontal movement is driven by per-behavior speeds — walk is 70 px/s, run 200 px/s, crawl 45 px/s — multiplied by a per-figure randomized `speedMul` (0.9–1.25), with facing flips at the screen margins. Voluntary jumps also vary in height (`jumpMul` 0.92–1.12), crouch duration, and landing rest. Faster runners lean slightly more and draw longer speed lines, so movement differences read clearly.
+Gravity is a constant `1500 px/s²`. Horizontal movement is driven by per-behavior speeds — walk is 70 px/s and run is 200 px/s — multiplied by a per-figure randomized `speedMul` (0.9–1.25), with facing flips at the screen margins. Voluntary jumps also vary in height (`jumpMul` 0.92–1.12), crouch duration, and landing rest. Faster runners lean slightly more and draw longer speed lines, so movement differences read clearly.
 
 Frame-to-frame position changes are smoothed into per-figure velocity and acceleration. Those values drive damped springs for the upper body, head, and arms (scaled down during authored attacks), add landing squash and settle, spawn small footstep dust puffs, and draw brief smear arcs on fast strikes. All of these are visual-only and are disabled or reduced when reduced motion is requested.
 
@@ -125,11 +124,11 @@ ready → approach → punch / kick / combo / spinkick / sweep / uppercut / flyi
       ↳ stagger / knockdown / launched / getup
 ```
 
-`landHit()` checks range, honors block/dodge, subtracts health, rolls for knockdown, applies knockback, and spawns hit effects, hit-stop, sound, and impact typography. Staggered figures recoil with a timed guard and recovery step. Knockdowns use a continuous knee-buckle → hip-drop → torso-rotate fall, land with dust and a thud, lie grounded with the head rotated, then push up through hands and crouch instead of popping upright. Facing is frozen while a figure is down or launched.
+`landHit()` checks range, honors block/dodge, subtracts health, rolls for knockdown, applies knockback, and spawns hit effects, hit-stop, sound, and impact typography. Staggered figures recoil with a timed guard and recovery step. Knockdowns use a continuous knee-buckle → hip-drop → torso-rotate fall, land with dust and a thud, lie grounded with the head rotated, then push up through hands and crouch instead of popping upright. A knocked-down fighter is dazed: small stars orbit the head until they recover, and the impact word reads `DOWN!`; `K.O.` is reserved for the fatal hit. Facing is frozen while a figure is down or launched.
 
 Every fighter starts a duel at 100 HP. A small bar above the head shows the remaining fraction and empties as hits land; blocks and dodges avoid damage entirely. At zero HP the fighter falls, lies for two seconds, then rises with a halo and angel wings, fades out, and is removed from the playground. Dying figures cannot be targeted, dragged, chatted with, or recruited as spectators, and the cinematic camera follows the rise before returning to normal framing.
 
-Brawler keeps the original state set. Wing Chun and Muay Thai route their signature attacks through a shared `strike` state driven by the `STRIKES` table, so each move has its own wind-up, hit windows, range, knockback, and recovery. Wing Chun closes distance and favors chain punches, low kicks, and parries; Muay Thai uses teep and roundhouse at range and knee/elbow up close. Style is per figure, saved as `stickman.style`, and locked while a selected figure is dueling.
+Brawler keeps the original state set. Wing Chun, Muay Thai, MMA, and Shaolin route their signature attacks through a shared `strike` state driven by the `STRIKES` table, so each move has its own wind-up, hit windows, range, knockback, and recovery. Wing Chun closes distance with a back-hop burst straight, and otherwise favors chain punches, low kicks, and parries; Muay Thai uses teep and roundhouse at range and knee/elbow up close; MMA mixes the GSP-style Superman punch, flying knee, high kick to the head, overhand right, low kick, and a 12-punch flurry at close range, and also fights from a bladed lead stance with a stop-hit burst straight, chain punches, finger-jab overhands, side and high kicks, and low lead kicks; Shaolin opens with long high kicks and roundhouses before closing for tiger-palm overhands, knees, and elbows. The flurry fires alternating jabs, crosses, hooks, body shots, and uppercuts in quick succession, then closes with a heavy overhand knockdown finisher and a `12 HIT COMBO!` word; the head punches track the opponent's head while the body shots land at rib height, and filler hits use short reactions, no hit-stop, and slightly rising pitch so the sequence stays fast instead of stuttering. The combo aborts if the target blocks, dodges, goes down, or drifts out of range. The Superman punch is the signature hit: a lead low-kick feint, a short switch-step hop, and a straight lead hand while the rear hand stays by the chin — a deceptive range-closer rather than a flying leap, with its own launch/crash sound. Style is per figure, saved as `stickman.style`, and locked while a selected figure is dueling.
 
 ### Ambient chatter
 

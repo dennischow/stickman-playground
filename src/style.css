@@ -29,6 +29,7 @@
   #selectionChip {
     display: flex; align-items: center; gap: 7px;
     flex: 0 1 auto; min-width: 0; max-width: min(420px, 46vw);
+    position: relative;
     padding: 4px 10px 4px 5px;
     border: 1px solid var(--line); border-radius: 999px;
     background: var(--paper-dim);
@@ -120,6 +121,39 @@
   }
   input[type="color"]:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   body[data-selection="none"] #colorPicker { display: none; }
+  #paletteBtn {
+    width: 22px; height: 22px; padding: 0; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid var(--line); border-radius: 50%;
+    background: var(--paper); color: var(--ink); cursor: pointer;
+  }
+  #paletteBtn svg { width: 13px; height: 13px; }
+  #paletteBtn:hover:not(:disabled),
+  #paletteBtn[aria-expanded="true"] {
+    background: var(--paper); border-color: var(--ink);
+  }
+  body[data-selection="none"] #paletteBtn { display: none; }
+  #palettePanel {
+    position: absolute; left: 0; top: calc(100% + 8px); z-index: 20;
+    display: grid; grid-template-columns: repeat(5, 22px); gap: 7px;
+    padding: 10px; border: 1px solid var(--line); border-radius: 12px;
+    background: var(--paper); box-shadow: 0 10px 24px rgba(27, 26, 23, 0.14);
+  }
+  #palettePanel[hidden] { display: none; }
+  .palette-swatch {
+    width: 22px; height: 22px; min-width: 22px; padding: 0;
+    border: 1px solid rgba(0, 0, 0, 0.18); border-radius: 50%;
+    background: var(--swatch);
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+  }
+  .palette-swatch:hover:not(:disabled) {
+    transform: scale(1.12); border-color: var(--ink); background: var(--swatch);
+  }
+  .palette-swatch[aria-pressed="true"] {
+    background: var(--swatch);
+    box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px var(--ink);
+  }
+  .palette-swatch:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
   #sceneSelect {
     font: inherit; font-size: 13px; height: 30px; padding: 0 26px 0 8px;
     border: 1px solid var(--line); border-radius: 4px; background-color: var(--paper);
@@ -161,7 +195,7 @@
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%231b1a17' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     background-repeat: no-repeat; background-position: right 8px center;
   }
-  #dock select:hover:not(:disabled) { background-color: var(--paper-dim); }
+  #dock select:hover:not(:disabled) { background-color: var(--paper-dim); color: var(--ink); }
   #dock select:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   #dock select:disabled { opacity: .45; cursor: default; }
   #dock .segmented {
@@ -200,6 +234,11 @@
     color: var(--paper);
     border-color: rgba(247, 246, 242, 0.22);
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23f7f6f2' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
+  body[data-cinematic="on"] #dock select:hover:not(:disabled) {
+    background-color: rgba(247, 246, 242, 0.14);
+    border-color: rgba(247, 246, 242, 0.38);
+    color: var(--paper);
   }
   body[data-cinematic="on"] #dock select option { color: var(--ink); background: var(--paper); }
   body[data-cinematic="on"] #dock .segmented { border-color: rgba(247, 246, 242, 0.22); }

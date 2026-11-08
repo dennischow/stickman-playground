@@ -1,4 +1,4 @@
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+import { clamp } from './constants.js';
 
 export class Camera {
   constructor() {
