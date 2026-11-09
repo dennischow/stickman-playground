@@ -86,6 +86,18 @@ export class Level {
     return this.onLowerStairPath(x, y) || this.onUpperStairPath(x, y);
   }
 
+  stairExitTarget(x, y) {
+    const lowerDist = this.isOnStairs(x) ? Math.abs(y - this.stairsYAt(x)) : Infinity;
+    const upperDist = this.isOnUpperStairs(x) ? Math.abs(y - this.upperStairsYAt(x)) : Infinity;
+    if (!Number.isFinite(lowerDist) && !Number.isFinite(upperDist)) return null;
+    if (upperDist <= lowerDist) {
+      const mid = (this.upperStairX0 + this.upperStairX1) * 0.5;
+      return x <= mid ? this.upperStairX0 - 8 : this.upperStairX1 + 8;
+    }
+    const mid = (this.stairX0 + this.stairX1) * 0.5;
+    return x <= mid ? this.stairX0 - 8 : this.stairX1 + 8;
+  }
+
   surfaceAt(x, currentY = Infinity) {
     const limit = currentY - 14;
     let best = this.groundY;

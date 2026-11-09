@@ -69,6 +69,12 @@ import { readStorage, writeStorage } from './storage.js';
   let lastPointer = null;
   let chaosOn = false;
   let chaosCd = 0;
+  let chaosResultT = 0;
+  let chaosHadMultipleTeams = false;
+  let chaosAutoEnded = false;
+  let chaosAlliance = null;
+  let chaosAllianceCd = 0;
+
   const bg = '#f7f6f2';
 
   const STYLES = {
@@ -80,6 +86,22 @@ import { readStorage, writeStorage } from './storage.js';
   };
   const CHAOS_RATIO = 1;
   const CHAOS_STYLES = Object.keys(STYLES);
+  const CHAOS_TEAM_NAMES = {
+    '#e53935': 'Crimson',
+    '#fb8c00': 'Orange',
+    '#fdd835': 'Amber',
+    '#43a047': 'Green',
+    '#00897b': 'Teal',
+    '#00acc1': 'Cyan',
+    '#1e88e5': 'Blue',
+    '#8e24aa': 'Purple',
+    '#d81b60': 'Pink',
+    '#6d4c41': 'Brown'
+  };
+  function chaosTeamName(color) {
+    const hex = rgbToHex(color).toLowerCase();
+    return CHAOS_TEAM_NAMES[hex] || hex.toUpperCase();
+  }
   const STYLE_COMBAT = {
     wingchun: { defend: 0.085, block: 0.72, blockT: 0.3, recoverMin: 0.16, recoverJitter: 0.18 },
     muaythai: { defend: 0.06, block: 0.52, blockT: 0.45, recoverMin: 0.35, recoverJitter: 0.35 },
@@ -1290,6 +1312,11 @@ import { readStorage, writeStorage } from './storage.js';
   }
 
   function startDuel(a, b, opts = {}) {
+    if (!opts.chaos && chaosAlliance && chaosAlliedColors(a.color, b.color)) {
+      breakChaosAlliance('manual');
+    }
+    clearChaosStairExit(a);
+    clearChaosStairExit(b);
     cancelChatFor(a);
     cancelChatFor(b);
     cancelPursuitsFor(a);
@@ -1355,8 +1382,141 @@ import { readStorage, writeStorage } from './storage.js';
     }
   }
 
+  function clearChaosStairExit(f) {
+    if (!f || !f.chaosStairExit) return;
+    f.chaosStairExit = false;
+    if (f.think === 999) f.think = 0.6 + Math.random() * 1.6;
+    if (f.behavior === 'walk' && !f.fighting && !f.pursuit && !f.pursuedBy && !f.dragging) {
+      f.setBehavior('idle');
+    }
+  }
+
+  function updateChaosStairExit() {
+    for (const f of figures) {
+      if (f.chaosStairExit) {
+        const offStairs = !level.isOnAnyStairPath(f.x, f.y);
+        if (offStairs || f.fighting || f.support || f.dying || f.dragging || f.blown ||
+            f.pursuit || f.pursuedBy || f.chatting || f.spectating) {
+          clearChaosStairExit(f);
+          continue;
+        }
+      }
+      if (!chaosOn || f.fighting || f.support || f.dying || f.dragging || f.blown ||
+          f.pursuit || f.pursuedBy || f.chatting || f.spectating) continue;
+      if (f.behavior === 'jump' || f.vy !== 0) continue;
+      if (!level.isOnAnyStairPath(f.x, f.y)) continue;
+      const targetX = level.stairExitTarget(f.x, f.y);
+      if (targetX == null) continue;
+      f.chaosStairExit = true;
+      f.think = 999;
+      f.setBehavior('walk');
+      f.facing = targetX < f.x ? -1 : 1;
+    }
+  }
+
+  function updateChaosWatchdog(dt) {
+    for (const f of figures) {
+      if (!f || f.dying) continue;
+      if (!f.fighting && !f.dragging && !f.blown) {
+        f.bodyScale = lerp(f.bodyScale, 1, Math.min(1, dt * 12));
+        if (f.bodyScale > 0.995) f.bodyScale = 1;
+        if (f.landT > 0) f.landT = Math.max(0, f.landT - dt);
+      }
+      const moved = f._chaosLastX == null
+        ? 0
+        : Math.hypot(f.x - f._chaosLastX, f.y - f._chaosLastY);
+      f._chaosLastX = f.x;
+      f._chaosLastY = f.y;
+
+      if (f.pursuedBy) {
+        const chaser = f.pursuedBy;
+        const pursuit = chaser.pursuit;
+        if (!pursuit || pursuit.target !== f) {
+          f.pursuedBy = null;
+        } else if (pursuit.stallX == null ||
+                   Math.hypot(chaser.x - pursuit.stallX, chaser.y - pursuit.stallY) >= 1) {
+          pursuit.stallX = chaser.x;
+          pursuit.stallY = chaser.y;
+          pursuit.stallT = 0;
+        } else {
+          pursuit.stallT = (pursuit.stallT || 0) + dt;
+          if (pursuit.stallT > 0.7) cancelPursuit(chaser);
+        }
+      }
+
+      const onStairs = level.isOnAnyStairPath(f.x, f.y);
+      if (onStairs) {
+        f.chaosIdleT = 0;
+        if (f.fighting || f.support || f.dragging || f.blown || f.chatting || f.spectating) {
+          f.chaosStairT = 0;
+          continue;
+        }
+        if (moved < 1) f.chaosStairT += dt;
+        else f.chaosStairT = 0;
+        if (f.chaosStairT < 2) continue;
+        f.chaosStairT = 0;
+        if (f.pursuit) cancelPursuit(f);
+        if (f.pursuedBy) {
+          if (f.pursuedBy.pursuit) cancelPursuit(f.pursuedBy);
+          else f.pursuedBy = null;
+        }
+        const targetX = level.stairExitTarget(f.x, f.y);
+        if (targetX != null) {
+          f.chaosStairExit = true;
+          f.think = 999;
+          f.setBehavior('walk');
+          f.facing = targetX < f.x ? -1 : 1;
+        }
+        continue;
+      }
+
+      f.chaosStairT = 0;
+      if (f.chaosStairExit) clearChaosStairExit(f);
+      if (f.fighting || f.support || f.dragging || f.blown || f.chatting || f.spectating ||
+          f.pursuit || f.pursuedBy || f.vy !== 0 || f.behavior === 'jump') {
+        f.chaosIdleT = 0;
+        continue;
+      }
+      const floor = level.floorAt(f.x, f.y);
+      if (floor < 0) {
+        f.chaosIdleT = 0;
+        continue;
+      }
+      if (moved < 1) f.chaosIdleT += dt;
+      else f.chaosIdleT = 0;
+      if (f.chaosIdleT < 1.5) continue;
+      f.chaosIdleT = 0;
+
+      const hc = f.color.toLowerCase();
+      let best = null;
+      let bestScore = Infinity;
+      for (const enemy of figures) {
+        if (enemy === f || enemy.dying || enemy.dragging || enemy.blown) continue;
+        if (enemy.color.toLowerCase() === hc) continue;
+        if (chaosAlliedColors(f.color, enemy.color)) continue;
+        const enemyFloor = level.floorAt(enemy.x, enemy.y);
+        if (enemyFloor < 0) continue;
+        const score = (enemyFloor === floor ? 0 : 10000) +
+          Math.abs(enemy.x - f.x);
+        if (score < bestScore) {
+          bestScore = score;
+          best = enemy;
+        }
+      }
+      if (best) {
+        beginPursuit(f, best, {
+          hunt: true,
+          chaos: true,
+          auto: true,
+          allowBlown: true,
+          waitForLanding: true
+        });
+      }
+    }
+  }
+
   function chaosEligible(f) {
-    if (!f || f.fighting || f.dying || f.dragging || f.blown) return false;
+    if (!f || f.fighting || f.support || f.dying || f.dragging || f.blown) return false;
     if (f.pursuit || f.pursuedBy || f.chatting || f.spectating) return false;
     if (f.vy !== 0) return false;
     if (level.isOnAnyStairPath(f.x, f.y)) return false;
@@ -1364,26 +1524,479 @@ import { readStorage, writeStorage } from './storage.js';
   }
 
   function startChaosPair(a, b) {
-    const floor = level.floorAt(a.x, a.y);
-    if (floor < 0 || level.floorAt(b.x, b.y) !== floor) return false;
+    if (!chaosEligible(a) || !chaosEligible(b)) return false;
     if (a.color.toLowerCase() === b.color.toLowerCase()) return false;
+    if (chaosAlliedColors(a.color, b.color)) return false;
+    const aFloor = level.floorAt(a.x, a.y);
+    const bFloor = level.floorAt(b.x, b.y);
+    if (aFloor < 0 || bFloor < 0) return false;
     a.style = pick(CHAOS_STYLES);
     const altStyles = CHAOS_STYLES.filter(style => style !== a.style);
     b.style = pick(altStyles.length ? altStyles : CHAOS_STYLES);
-    startDuel(a, b, { chaos: true });
+    if (aFloor === bFloor) {
+      startDuel(a, b, { chaos: true });
+    } else {
+      beginPursuit(a, b, { hunt: true, chaos: true, auto: true, allowBlown: true, waitForLanding: true });
+      beginPursuit(b, a, { hunt: true, chaos: true, auto: true, allowBlown: true, waitForLanding: true });
+    }
     return true;
+  }
+
+  function chaosTeamDistance(a, b) {
+    let best = Infinity;
+    for (const fa of a.members) {
+      const af = level.floorAt(fa.x, fa.y);
+      for (const fb of b.members) {
+        const bf = level.floorAt(fb.x, fb.y);
+        const dist = (af === bf ? 0 : 1000) + Math.abs(fa.x - fb.x);
+        if (dist < best) best = dist;
+      }
+    }
+    return best;
+  }
+
+  function chaosTeamInfo() {
+    const teams = new Map();
+    for (const f of figures) {
+      if (f.dying) continue;
+      const key = f.color.toLowerCase();
+      let team = teams.get(key);
+      if (!team) {
+        team = {
+          key,
+          color: f.color,
+          members: [],
+          hp: 0,
+          engaged: new Map(),
+          focusOrder: []
+        };
+        teams.set(key, team);
+      }
+      team.members.push(f);
+      team.hp += f.hp;
+    }
+    for (const team of teams.values()) {
+      for (const f of team.members) {
+        if (!f.fighting || !f.foe || f.foe.dying) continue;
+        const enemyKey = f.foe.color.toLowerCase();
+        if (enemyKey === team.key) continue;
+        team.engaged.set(enemyKey, (team.engaged.get(enemyKey) || 0) + 1);
+      }
+    }
+    return teams;
+  }
+
+  function chaosAlliedColors(c1, c2) {
+    if (!chaosAlliance) return false;
+    const a = c1.toLowerCase();
+    const b = c2.toLowerCase();
+    return (chaosAlliance.a === a && chaosAlliance.b === b) ||
+      (chaosAlliance.a === b && chaosAlliance.b === a);
+  }
+
+  function breakChaosAlliance(reason) {
+    if (!chaosAlliance) return;
+    chaosAlliance = null;
+    chaosAllianceCd = Math.max(chaosAllianceCd, 6);
+  }
+
+  function updateChaosAlliance(teams, dt) {
+    if (chaosAllianceCd > 0) chaosAllianceCd = Math.max(0, chaosAllianceCd - dt);
+    if (!chaosOn || teams.size < 3) {
+      chaosAlliance = null;
+      return;
+    }
+    if (chaosAlliance) {
+      const a = teams.get(chaosAlliance.a);
+      const b = teams.get(chaosAlliance.b);
+      const target = teams.get(chaosAlliance.target);
+      chaosAlliance.ttl -= dt;
+      if (!a || !b || !target || chaosAlliance.ttl <= 0) {
+        chaosAlliance = null;
+        chaosAllianceCd = Math.max(chaosAllianceCd, 6);
+      }
+      return;
+    }
+    if (chaosAllianceCd > 0) return;
+    let dominant = null;
+    let living = 0;
+    for (const team of teams.values()) {
+      living += team.members.length;
+      if (!dominant || team.members.length > dominant.members.length) dominant = team;
+    }
+    if (!dominant || dominant.members.length < living * 0.5) return;
+    const others = [...teams.values()].filter(t => t !== dominant);
+    if (others.length < 2) return;
+    others.sort((a, b) => a.members.length - b.members.length ||
+      a.hp - b.hp ||
+      chaosTeamDistance(dominant, a) - chaosTeamDistance(dominant, b));
+    const [a, b] = others;
+    chaosAlliance = { a: a.key, b: b.key, target: dominant.key, ttl: 18 };
+    flashStatus(`${chaosTeamName(a.color)} + ${chaosTeamName(b.color)} alliance vs ${chaosTeamName(dominant.color)}`, 2600);
+    for (const f of figures) {
+      if (f.fighting && f.foe && chaosAlliedColors(f.color, f.foe.color)) endDuel(f);
+      if (f.pursuit && chaosAlliedColors(f.color, f.pursuit.target.color)) cancelPursuit(f);
+      if (f.pursuedBy && chaosAlliedColors(f.color, f.pursuedBy.color)) {
+        if (f.pursuedBy.pursuit) cancelPursuit(f.pursuedBy);
+        else f.pursuedBy = null;
+      }
+    }
+  }
+
+  function chaosFocusMap(teams) {
+    const focusMap = new Map();
+    for (const team of teams.values()) {
+      let candidates = [...teams.values()].filter(t => t.key !== team.key);
+      if (chaosAlliance && (team.key === chaosAlliance.a || team.key === chaosAlliance.b)) {
+        const allyKey = team.key === chaosAlliance.a ? chaosAlliance.b : chaosAlliance.a;
+        candidates = candidates.filter(t => t.key !== allyKey);
+      }
+      candidates.sort((a, b) => {
+        const ea = team.engaged.get(a.key) || 0;
+        const eb = team.engaged.get(b.key) || 0;
+        if (ea !== eb) return eb - ea;
+        if (a.members.length !== b.members.length) return a.members.length - b.members.length;
+        if (a.hp !== b.hp) return a.hp - b.hp;
+        return chaosTeamDistance(team, a) - chaosTeamDistance(team, b);
+      });
+      if (chaosAlliance && (team.key === chaosAlliance.a || team.key === chaosAlliance.b)) {
+        const targetIndex = candidates.findIndex(t => t.key === chaosAlliance.target);
+        if (targetIndex > 0) {
+          const [target] = candidates.splice(targetIndex, 1);
+          candidates.unshift(target);
+        }
+      }
+      team.focusOrder = candidates.map(t => t.key);
+      focusMap.set(team.key, team.focusOrder[0] || null);
+    }
+    return focusMap;
+  }
+
+  function chaosHelperCoverage(helper, target) {
+    const hc = helper.color.toLowerCase();
+    let count = 0;
+    for (const f of figures) {
+      if (f === helper || f.color.toLowerCase() !== hc) continue;
+      if (f.foe === target || (f.pursuit && f.pursuit.target === target)) count++;
+    }
+    return count;
+  }
+
+  function nearestChaosEnemy(f) {
+    const hc = f.color.toLowerCase();
+    const ownFloor = level.floorAt(f.x, f.y);
+    let best = null;
+    let bestScore = Infinity;
+    for (const enemy of figures) {
+      if (enemy === f || enemy.dying || enemy.dragging || enemy.blown) continue;
+      if (enemy.color.toLowerCase() === hc) continue;
+      if (chaosAlliedColors(f.color, enemy.color)) continue;
+      const enemyFloor = level.floorAt(enemy.x, enemy.y);
+      if (enemyFloor < 0) continue;
+      const score = (enemyFloor === ownFloor ? 0 : 10000) + Math.abs(enemy.x - f.x);
+      if (score < bestScore) {
+        bestScore = score;
+        best = enemy;
+      }
+    }
+    return best;
+  }
+
+  function forceChaosEngage(f) {
+    if (!chaosOn || f.dying || f.dragging || f.blown || f.fighting || f.support ||
+        f.pursuit || f.pursuedBy) return false;
+    if (level.floorAt(f.x, f.y) < 0) return false;
+    const enemy = nearestChaosEnemy(f);
+    if (!enemy) return false;
+    const ff = level.floorAt(f.x, f.y);
+    const ef = level.floorAt(enemy.x, enemy.y);
+    if (ff >= 0 && ff === ef && !enemy.fighting && !enemy.support) {
+      startDuel(f, enemy, { chaos: true });
+    } else {
+      beginPursuit(f, enemy, {
+        hunt: true,
+        chaos: true,
+        auto: true,
+        allowBlown: true,
+        waitForLanding: true
+      });
+    }
+    return true;
+  }
+
+  function updateChaosNoWait(dt) {
+    for (const f of figures) {
+      if (!f || f.dying || f.dragging || f.blown || f.chatting || f.spectating) continue;
+      if (f.combat && DOWN_STATES.has(f.combat.state)) continue;
+      const ff = level.floorAt(f.x, f.y);
+      if (ff < 0) continue;
+      const near = nearestChaosEnemy(f);
+      if (f.support) {
+        const t = f.support.target;
+        if (!t || t.dying || t.blown) {
+          cancelSupport(f);
+          forceChaosEngage(f);
+          continue;
+        }
+        if (near && near !== t && level.floorAt(near.x, near.y) === ff &&
+            Math.abs(near.x - f.x) + 40 < Math.abs(t.x - f.x)) {
+          cancelSupport(f);
+          forceChaosEngage(f);
+        }
+        continue;
+      }
+      if (f.fighting) {
+        if (!f.chaosFight) continue;
+        const t = f.foe;
+        if (!t || t.dying || t.blown) {
+          endDuel(f);
+          forceChaosEngage(f);
+          continue;
+        }
+        if (near && near !== t && level.floorAt(near.x, near.y) === ff &&
+            Math.abs(near.x - f.x) + 80 < Math.abs(t.x - f.x)) {
+          endDuel(f);
+          forceChaosEngage(f);
+        }
+        continue;
+      }
+      if (f.pursuit) {
+        const t = f.pursuit.target;
+        if (!t || t.dying || t.blown) {
+          cancelPursuit(f);
+          forceChaosEngage(f);
+        }
+        continue;
+      }
+      if (f.pursuedBy) continue;
+      forceChaosEngage(f);
+    }
+  }
+
+  function assignChaosHelpers(teams, focusMap) {
+    if (!chaosOn) return;
+    const duels = [];
+    const seen = new Set();
+    for (const f of figures) {
+      if (!f.fighting || !f.foe || !f.chaosFight || f.dying || f.support) continue;
+      const other = f.foe;
+      if (!other.fighting || other.foe !== f || other.dying || other.support) continue;
+      if (seen.has(f) || seen.has(other)) continue;
+      seen.add(f);
+      seen.add(other);
+      duels.push([f, other]);
+    }
+
+    const helpers = figures.filter(f => chaosEligible(f));
+    if (!helpers.length) return;
+    const helperSet = new Set(helpers);
+    const enemies = figures.filter(f =>
+      !f.dying && !f.dragging && !f.blown && !helperSet.has(f)
+    );
+
+    for (const helper of helpers) {
+      const hc = helper.color.toLowerCase();
+      const helperFloor = level.floorAt(helper.x, helper.y);
+      const team = teams.get(hc);
+      const order = team && team.focusOrder.length
+        ? team.focusOrder
+        : [...teams.keys()].filter(key => key !== hc);
+      let assigned = false;
+
+      // If a same-color teammate is already in a real duel, help immediately.
+      const nearEnemy = nearestChaosEnemy(helper);
+      if (nearEnemy && level.floorAt(nearEnemy.x, nearEnemy.y) === helperFloor) {
+        const mate = figures.find(g =>
+          g !== helper &&
+          g.color.toLowerCase() === hc &&
+          g.fighting && !g.support &&
+          g.foe === nearEnemy && nearEnemy.foe === g
+        );
+        beginPursuit(helper, nearEnemy, mate ? {
+          assist: true,
+          teammate: mate,
+          auto: true,
+          allowBlown: true,
+          waitForLanding: true
+        } : {
+          hunt: true,
+          chaos: true,
+          auto: true,
+          allowBlown: true,
+          waitForLanding: true
+        });
+        continue;
+      }
+
+      const assistMate = figures.find(g =>
+        g !== helper &&
+        g.color.toLowerCase() === hc &&
+        g.fighting && !g.support && g.foe &&
+        g.foe.fighting && g.foe.foe === g &&
+        !chaosAlliedColors(helper.color, g.foe.color) &&
+        chaosHelperCoverage(helper, g.foe) === 0
+      );
+      if (assistMate) {
+        beginPursuit(helper, assistMate.foe, {
+          assist: true,
+          teammate: assistMate,
+          auto: true,
+          allowBlown: true,
+          waitForLanding: true
+        });
+        continue;
+      }
+
+      // Work through the team's focus order: finish the chosen team first.
+      for (const enemyKey of order) {
+        let best = null;
+        let bestScore = Infinity;
+
+        // Join a same-color teammate who is already fighting this enemy team.
+        for (const [a, b] of duels) {
+          const ac = a.color.toLowerCase();
+          const bc = b.color.toLowerCase();
+          let teammate = null;
+          let target = null;
+          if (ac === hc && bc === enemyKey) {
+            teammate = a;
+            target = b;
+          } else if (bc === hc && ac === enemyKey) {
+            teammate = b;
+            target = a;
+          }
+          if (!teammate || !target) continue;
+          if (chaosHelperCoverage(helper, target) > 0) continue;
+          const targetFloor = level.floorAt(target.x, target.y);
+          if (targetFloor < 0) continue;
+          const score = (targetFloor === helperFloor ? 0 : 10000) +
+            target.hp * 0.25 + Math.abs(target.x - helper.x) * 0.01;
+          if (score < bestScore) {
+            bestScore = score;
+            best = { teammate, target };
+          }
+        }
+        if (best) {
+          beginPursuit(helper, best.target, {
+            assist: true,
+            teammate: best.teammate,
+            auto: true,
+            allowBlown: true,
+            waitForLanding: true
+          });
+          assigned = true;
+          break;
+        }
+
+        // Otherwise hunt the weakest reachable member of that team.
+        best = null;
+        bestScore = Infinity;
+        for (const enemy of enemies) {
+          if (enemy.color.toLowerCase() !== enemyKey) continue;
+          if (chaosAlliedColors(helper.color, enemy.color)) continue;
+          const enemyFloor = level.floorAt(enemy.x, enemy.y);
+          if (enemyFloor < 0) continue;
+          const score = (enemyFloor === helperFloor ? 0 : 10000) +
+            enemy.hp * 0.25 + Math.abs(enemy.x - helper.x) * 0.01 +
+            chaosHelperCoverage(helper, enemy) * 2500 + (enemy.support ? 2000 : 0);
+          if (score < bestScore) {
+            bestScore = score;
+            best = { target: enemy };
+          }
+        }
+        if (best) {
+          const target = best.target;
+          const mate = target.fighting && target.foe && target.foe.foe === target &&
+            target.foe.color.toLowerCase() === hc ? target.foe : null;
+          beginPursuit(helper, target, mate ? {
+            assist: true,
+            teammate: mate,
+            auto: true,
+            allowBlown: true,
+            waitForLanding: true
+          } : {
+            hunt: true,
+            chaos: true,
+            auto: true,
+            allowBlown: true,
+            waitForLanding: true
+          });
+          assigned = true;
+          break;
+        }
+      }
+      if (assigned) continue;
+
+      // Safety fallback: any reachable enemy on any floor.
+      let best = null;
+      let bestScore = Infinity;
+      for (const enemy of enemies) {
+        if (enemy.color.toLowerCase() === hc) continue;
+        if (chaosAlliedColors(helper.color, enemy.color)) continue;
+        const enemyFloor = level.floorAt(enemy.x, enemy.y);
+        if (enemyFloor < 0) continue;
+        const score = (enemyFloor === helperFloor ? 0 : 10000) +
+          enemy.hp * 0.25 + Math.abs(enemy.x - helper.x) * 0.01 +
+          chaosHelperCoverage(helper, enemy) * 2500 + (enemy.support ? 2000 : 0);
+        if (score < bestScore) {
+          bestScore = score;
+          best = { target: enemy };
+        }
+      }
+      if (!best) continue;
+      const target = best.target;
+      const mate = target.fighting && target.foe &&
+        target.foe.color.toLowerCase() === hc ? target.foe : null;
+      beginPursuit(helper, target, mate ? {
+        assist: true,
+        teammate: mate,
+        auto: true,
+        allowBlown: true,
+        waitForLanding: true
+      } : {
+        hunt: true,
+        chaos: true,
+        auto: true,
+        allowBlown: true,
+        waitForLanding: true
+      });
+    }
   }
 
   function updateChaos(dt) {
     if (!chaosOn) return;
+    if (chaosResultT > 0) {
+      const colors = new Set(figures.filter(f => !f.dying).map(f => f.color.toLowerCase()));
+      if (colors.size > 1) {
+        chaosResultT = 0;
+        chaosHadMultipleTeams = true;
+      } else {
+        chaosResultT -= dt;
+        if (chaosResultT <= 0) setChaos(false, true);
+        return;
+      }
+    }
+    updateChaosStairExit();
+    updateChaosWatchdog(dt);
     const living = figures.filter(f => !f.dying);
+    const teamInfo = chaosTeamInfo();
+    if (teamInfo.size > 1) chaosHadMultipleTeams = true;
+    if (!living.length) {
+      setChaos(false, true);
+      flashStatus('Nothing left.', 3800);
+      return;
+    }
+    if (teamInfo.size === 1 && chaosHadMultipleTeams) {
+      const color = teamInfo.values().next().value.color;
+      setChaos(false, true);
+      flashStatus(`${chaosTeamName(color)} team survives!`, 3800);
+      return;
+    }
     if (living.length < 2) return;
+    updateChaosAlliance(teamInfo, dt);
+    const focusMap = chaosFocusMap(teamInfo);
     const target = Math.max(2, 2 * Math.floor((living.length * CHAOS_RATIO) / 2));
-    const active = figures.filter(f => f.fighting && f.foe && !f.dying).length;
-    if (active >= target) return;
-    chaosCd -= dt;
-    if (chaosCd > 0) return;
-    chaosCd = 0.22 + Math.random() * 0.24;
+    const active = figures.filter(f => f.fighting && f.foe && !f.dying && !f.support).length;
 
     const byFloor = new Map();
     for (const f of figures) {
@@ -1392,19 +2005,61 @@ import { readStorage, writeStorage } from './storage.js';
       if (!byFloor.has(floor)) byFloor.set(floor, []);
       byFloor.get(floor).push(f);
     }
-    const pairs = [];
+    const sameFloorPairs = [];
+    const crossFloorPairs = [];
+    const eligible = [];
     for (const list of byFloor.values()) {
+      eligible.push(...list);
       for (let i = 0; i < list.length - 1; i++) {
         for (let j = i + 1; j < list.length; j++) {
-          if (list[i].color.toLowerCase() !== list[j].color.toLowerCase()) {
-            pairs.push([list[i], list[j]]);
+          if (list[i].color.toLowerCase() !== list[j].color.toLowerCase() &&
+              !chaosAlliedColors(list[i].color, list[j].color)) {
+            sameFloorPairs.push([list[i], list[j]]);
           }
         }
       }
     }
-    if (!pairs.length) return;
-    const [a, b] = pick(pairs);
-    startChaosPair(a, b);
+    for (let i = 0; i < eligible.length - 1; i++) {
+      for (let j = i + 1; j < eligible.length; j++) {
+        if (level.floorAt(eligible[i].x, eligible[i].y) === level.floorAt(eligible[j].x, eligible[j].y)) {
+          continue;
+        }
+        if (eligible[i].color.toLowerCase() !== eligible[j].color.toLowerCase() &&
+            !chaosAlliedColors(eligible[i].color, eligible[j].color)) {
+          crossFloorPairs.push([eligible[i], eligible[j]]);
+        }
+      }
+    }
+    const isFocusPair = ([a, b]) => {
+      const ka = a.color.toLowerCase();
+      const kb = b.color.toLowerCase();
+      return focusMap.get(ka) === kb || focusMap.get(kb) === ka;
+    };
+    const sameFocusPairs = sameFloorPairs.filter(isFocusPair);
+    const crossFocusPairs = crossFloorPairs.filter(isFocusPair);
+    const pairPool = sameFocusPairs.length
+      ? sameFocusPairs
+      : sameFloorPairs.length
+        ? sameFloorPairs
+        : crossFocusPairs.length
+          ? crossFocusPairs
+          : crossFloorPairs;
+    if (active < target && pairPool.length) {
+      chaosCd -= dt;
+      if (chaosCd <= 0) {
+        chaosCd = 0.12 + Math.random() * 0.18;
+        pairPool.sort((p, q) => {
+          const pSame = level.floorAt(p[0].x, p[0].y) === level.floorAt(p[1].x, p[1].y);
+          const qSame = level.floorAt(q[0].x, q[0].y) === level.floorAt(q[1].x, q[1].y);
+          return ((pSame ? 0 : 10000) + Math.abs(p[0].x - p[1].x)) -
+            ((qSame ? 0 : 10000) + Math.abs(q[0].x - q[1].x));
+        });
+        const [a, b] = pairPool[0];
+        startChaosPair(a, b);
+      }
+    }
+    assignChaosHelpers(teamInfo, focusMap);
+    updateChaosNoWait(dt);
   }
 
   function syncChaosUI() {
@@ -1412,31 +2067,59 @@ import { readStorage, writeStorage } from './storage.js';
       chaosBtn.setAttribute('aria-pressed', chaosOn ? 'true' : 'false');
       chaosBtn.title = chaosOn
         ? 'Chaos mode is on — click to restore order'
-        : 'Chaos mode: all possible cross-color pairs fight';
+        : 'Chaos mode: cross-color pairs fight; leftovers hunt enemies; last team survives';
     }
     document.body.dataset.chaos = chaosOn ? 'on' : 'off';
   }
 
-  function setChaos(on) {
+  function setChaos(on, quiet = false) {
     const next = !!on;
     if (next === chaosOn) return;
     chaosOn = next;
     chaosCd = 0;
+    chaosAlliance = null;
+    chaosAllianceCd = 0;
     if (chaosOn) {
+      chaosAutoEnded = false;
       cancelFightPick();
       cancelChat();
       for (const f of figures) {
         cancelSpectating(f);
+        if (f.support) cancelSupport(f);
         if (f.pursuit) cancelPursuit(f);
+        clearChaosStairExit(f);
       }
+      for (const f of figures) {
+        if (f.pursuedBy && (!f.pursuedBy.pursuit || f.pursuedBy.pursuit.target !== f)) {
+          f.pursuedBy = null;
+        }
+        if (f.fighting && (!f.foe || f.foe.dying || f.foe.foe !== f)) {
+          f.stopFight();
+        }
+        f.chaosIdleT = 0;
+        f.chaosStairT = 0;
+        f._chaosLastX = null;
+        f._chaosLastY = null;
+      }
+      chaosResultT = 0;
+      const colors = new Set(figures.filter(f => !f.dying).map(f => f.color.toLowerCase()));
+      chaosHadMultipleTeams = colors.size > 1;
       flashStatus('CHAOS!', 1400);
       updateChaos(0);
     } else {
+      chaosAutoEnded = !!quiet;
+      chaosResultT = 0;
+      chaosHadMultipleTeams = false;
       for (const f of [...figures]) {
+        clearChaosStairExit(f);
+        if (f.pursuit && (f.pursuit.chaos || f.pursuit.assist || f.pursuit.hunt)) {
+          cancelPursuit(f);
+        }
+        if (f.support) cancelSupport(f);
         if (f.chaosFight && f.fighting) endDuel(f);
       }
       chatCd = 8 + Math.random() * 7;
-      flashStatus('Order restored', 1500);
+      if (!quiet) flashStatus('Order restored', 1500);
     }
     syncChaosUI();
   }
@@ -1446,6 +2129,12 @@ import { readStorage, writeStorage } from './storage.js';
     cancelChatFor(f);
     cancelSpectating(f);
     cancelPursuitsFor(f);
+    if (f.support) cancelSupport(f);
+    f.rearAttacker = null;
+    f.rearT = 0;
+    f.rearCd = 0;
+    f.rearCounterTarget = null;
+    f.faceHoldT = 0;
     if (f.foe) endDuel(f);
     f.fighting = false;
     f.foe = null;
@@ -1622,6 +2311,7 @@ import { readStorage, writeStorage } from './storage.js';
     cancelFightPick();
     clearDuelIntro(caster);
     clearDuelIntro(target);
+    if (target.support) cancelSupport(target);
     const dir = target.x !== caster.x ? Math.sign(target.x - caster.x) : caster.facing;
     let lethal = false;
     if (target.fighting) {
@@ -1734,11 +2424,11 @@ import { readStorage, writeStorage } from './storage.js';
   }
 
   const DOWN_STATES = new Set(['knockdown', 'getup', 'launched', 'stagger']);
-  const ATTACK_STATES = new Set(['punch', 'kick', 'combo', 'flurry', 'sweep', 'uppercut', 'flyingkick', 'spinkick', 'strike']);
-  const TRAIL_STATES = new Set(['flyingkick', 'spinkick', 'punch', 'kick', 'combo', 'flurry', 'uppercut', 'strike']);
+  const ATTACK_STATES = new Set(['punch', 'kick', 'combo', 'flurry', 'sweep', 'uppercut', 'flyingkick', 'strike']);
+  const TRAIL_STATES = new Set(['flyingkick', 'punch', 'kick', 'combo', 'flurry', 'uppercut', 'strike']);
   const ATTACK_RE = /punch|kick|combo|flurry|sweep|uppercut|strike/;
-  const ATTACK_FULL_RE = /punch|kick|combo|flurry|spinkick|sweep|uppercut|flyingkick|strike/;
-  const HEAVY_KICK_RE = /spinkick|flyingkick/;
+  const ATTACK_FULL_RE = /punch|kick|combo|flurry|sweep|uppercut|flyingkick|strike/;
+  const HEAVY_KICK_RE = /flyingkick/;
   const DOWN_BLEND_RE = /knockdown|getup|launched/;
   const KICK_MOVE_RE = /lowkick|highkick|teep|roundhouse|flyknee/;
   const ARM_STRIKE_RE = /chainpunch|elbow|superman|overhand|burst/;
@@ -1773,6 +2463,8 @@ import { readStorage, writeStorage } from './storage.js';
       this.think = 1 + Math.random() * 2.5;
       this.speedMul = 0.9 + Math.random() * 0.35;
       this.jumpMul = 0.92 + Math.random() * 0.2;
+      this.heightScale = pick([0.9, 1.0, 1.1]);
+      this.visualScale = 1;
       this.jumpPrep = 0.24 + Math.random() * 0.12;
       this.jumpRest = 0.45 + Math.random() * 0.25;
       this.bodyScale = 1;
@@ -1793,6 +2485,17 @@ import { readStorage, writeStorage } from './storage.js';
       this.spectating = null;
       this.pursuit = null;
       this.pursuedBy = null;
+      this.support = null;
+      this.chaosStairExit = false;
+      this.chaosIdleT = 0;
+      this.chaosStairT = 0;
+      this._chaosLastX = null;
+      this._chaosLastY = null;
+      this.rearAttacker = null;
+      this.rearT = 0;
+      this.rearCd = 0;
+      this.rearCounterTarget = null;
+      this.faceHoldT = 0;
       this.fightTarget = false;
       this.chatting = false;
       this.chatPartner = null;
@@ -1840,13 +2543,23 @@ import { readStorage, writeStorage } from './storage.js';
       this.combat = createCombatState('ready');
       this.flurryCd = 2.5;
       this.dizzyT = 0;
+      this.rearAttacker = null;
+      this.rearT = 0;
+      this.rearCd = 0;
+      this.rearCounterTarget = null;
+      this.faceHoldT = 0;
     }
 
     startFight(foe) {
       this.fighting = true;
       this.foe = foe || null;
-      this.hp = MAX_HP;
-      this.maxHp = MAX_HP;
+      if (chaosOn) {
+        this.hp = clamp(this.hp, 1, MAX_HP);
+        this.maxHp = MAX_HP;
+      } else {
+        this.hp = MAX_HP;
+        this.maxHp = MAX_HP;
+      }
       this.dying = null;
       this.spectating = null;
       this.behavior = 'idle';
@@ -1864,12 +2577,18 @@ import { readStorage, writeStorage } from './storage.js';
       clearDuelIntro(this);
       this.fighting = false;
       this.foe = null;
+      this.support = null;
       this.chaosFight = false;
       this.combatFloor = null;
       this.trail.length = 0;
       this.combat = createCombatState('idle', 0);
       this.flurryCd = 0;
       this.dizzyT = 0;
+      this.rearAttacker = null;
+      this.rearT = 0;
+      this.rearCd = 0;
+      this.rearCounterTarget = null;
+      this.faceHoldT = 0;
     }
 
     setBehavior(b) {
@@ -2079,7 +2798,17 @@ import { readStorage, writeStorage } from './storage.js';
       const p = this.pursuit;
       if (!p) return;
       const target = p.target;
-      if (!target || target.pursuedBy !== this || target.dragging || target.fighting ||
+      if (!target || target.dragging ||
+          ((p.chaos || p.assist || p.hunt) && (target.dying || target.blown)) ||
+          (p.assist
+            ? (!target.fighting || !p.teammate ||
+               target.foe !== p.teammate ||
+               !p.teammate.fighting || p.teammate.dying ||
+               p.teammate.foe !== target)
+            : p.hunt
+              ? (target.dying || target.support ||
+                 target.color.toLowerCase() === this.color.toLowerCase())
+              : (target.pursuedBy !== this || target.fighting)) ||
           (target.blown && !p.allowBlown)) {
         cancelPursuit(this);
         return;
@@ -2095,16 +2824,23 @@ import { readStorage, writeStorage } from './storage.js';
         return;
       }
       p.t += dt;
-      if (p.t > Math.max(10, W / 200)) {
+      const chaseLimit = p.assist
+        ? Math.max(16, W / 150)
+        : p.hunt
+          ? Math.max(20, W / 120)
+          : Math.max(10, W / 200);
+      if (p.t > chaseLimit) {
         cancelPursuit(this);
-        flashStatus("Can't reach", 1600);
+        if (!p.assist && !p.hunt) flashStatus("Can't reach", 1600);
         return;
       }
-      const myFloor = pursuitFloor(level, this.x, this.y);
+      let myFloor = pursuitFloor(level, this.x, this.y);
       const targetFloor = pursuitFloor(level, target.x, target.y);
+      if (targetFloor === 0 && Math.abs(this.y - level.groundY) <= 2) myFloor = 0;
+      const groundRoute = myFloor === 0 && targetFloor === 0;
       if (targetFloor < 0) {
         cancelPursuit(this);
-        flashStatus('Target on stairs', 1400);
+        if (!p.assist && !p.hunt) flashStatus('Target on stairs', 1400);
         return;
       }
       if (p.drop) {
@@ -2134,7 +2870,19 @@ import { readStorage, writeStorage } from './storage.js';
         return;
       }
       if (myFloor >= 0 && myFloor === targetFloor && Math.abs(target.x - this.x) <= 90 && !target.blown) {
-        startDuel(this, target);
+        if (p.assist) {
+          if (!beginSupport(this, target, p.teammate)) cancelPursuit(this);
+        } else if (p.hunt) {
+          const mate = target.fighting && target.foe &&
+            target.foe.color.toLowerCase() === this.color.toLowerCase() ? target.foe : null;
+          if (target.fighting) {
+            if (!beginSupport(this, target, mate)) cancelPursuit(this);
+          } else {
+            startDuel(this, target, { chaos: true });
+          }
+        } else {
+          startDuel(this, target, { chaos: !!p.chaos });
+        }
         return;
       }
       let goalX;
@@ -2173,7 +2921,9 @@ import { readStorage, writeStorage } from './storage.js';
           goalX = level.mezzX1 + 24;
         } else if (myFloor !== targetFloor) {
           if (myFloor === 0) {
-            goalX = level.stairX1 + 4;
+            goalX = this.x <= level.stairX0 + 2
+              ? level.stairX1 + 4
+              : level.stairX0 - 4;
           } else if (myFloor === 1) {
             goalX = targetFloor === 2 ? level.upperStairX1 - 4 : level.stairX1 - 4;
           } else {
@@ -2199,7 +2949,7 @@ import { readStorage, writeStorage } from './storage.js';
         this.y = level.mezzY;
         return;
       }
-      this.y = pursuitSurfaceY(level, this.x, this.y, useUpper);
+      this.y = groundRoute ? level.groundY : pursuitSurfaceY(level, this.x, this.y, useUpper);
       this.vy = 0;
       const stride = Math.PI * 2;
       const stepIdx = Math.floor(this.phase / stride);
@@ -2387,6 +3137,10 @@ import { readStorage, writeStorage } from './storage.js';
         return;
       }
 
+      if (this.fighting) {
+        this.updateFight(dt, level);
+        return;
+      }
       if (this.pursuit) {
         this.updatePursuit(dt, level);
         return;
@@ -2458,11 +3212,6 @@ import { readStorage, writeStorage } from './storage.js';
         this.vy = 0;
       }
 
-      if (this.fighting) {
-        this.updateFight(dt, level);
-        return;
-      }
-
       let moveSpeed = 0;
       if (this.behavior === 'walk') moveSpeed = WALK_SPEED;
       else if (this.behavior === 'run') moveSpeed = RUN_SPEED;
@@ -2526,10 +3275,15 @@ import { readStorage, writeStorage } from './storage.js';
     }
 
     landHit(enemy, opts) {
-      const {
+      let {
         range, kbx, kdChance = 0, freeze = 0.05, shake = 5, starScale = 1,
         damage = 0, fx = null, flurry = false, finisher = false, pitch = null, aim = null
       } = opts;
+      if (this.support) {
+        damage = Math.max(1, Math.round(damage * 0.75));
+        kbx = Math.round(kbx * 0.75);
+        kdChance *= 0.5;
+      }
       const dist = Math.abs(enemy.x - this.x);
       if (dist > range) return;
       if (enemy.dying || !enemy.fighting) return;
@@ -2559,6 +3313,13 @@ import { readStorage, writeStorage } from './storage.js';
       const midX = (this.x + enemy.x) / 2;
       const hitY = aimY;
       const knocked = lethal || opts.guaranteedKd || Math.random() < kdChance;
+      if (enemy.foe && (enemy.foe !== this || enemy.rearAttacker)) {
+        enemy.rearAttacker = this;
+        enemy.rearT = knocked ? 5 : 3.2;
+        enemy.rearCd = 0;
+        enemy.facing = this.x >= enemy.x ? 1 : -1;
+        enemy.faceHoldT = knocked ? 0.6 : 0.4;
+      }
       const reactStrength = clamp(0.5 + kbx / 320, 0.5, 1.3);
       const reactKind = knocked || kbx >= 240 ? 'heavy' : kbx >= 150 || starScale >= 1.2 ? 'kick' : 'punch';
       if (knocked) {
@@ -2655,12 +3416,26 @@ import { readStorage, writeStorage } from './storage.js';
         c.kbx *= Math.pow(0.001, dt);
       } else c.kbx = 0;
 
-      if (this.foe && (!this.foe.fighting || this.foe.foe !== this)) {
+      if (this.foe && (
+        !this.foe.fighting ||
+        (this.support
+          ? this.foe !== this.support.target ||
+            (this.support.teammate && (
+              this.support.teammate.foe !== this.foe ||
+              this.foe.foe !== this.support.teammate ||
+              !this.support.teammate.fighting ||
+              this.support.teammate.dying
+            ))
+          : this.foe.foe !== this)
+      )) {
         this.stopFight();
         return;
       }
-      const enemy = this.foe;
-      if (!enemy) {
+      const foe = this.foe;
+      if (!foe) {
+        this.rearAttacker = null;
+        this.rearT = 0;
+        this.rearCounterTarget = null;
         c.state = 'wander';
         this.x += this.facing * 50 * this.speedMul * dt;
         this.x = clamp(this.x, xMin, xMax);
@@ -2669,18 +3444,78 @@ import { readStorage, writeStorage } from './storage.js';
         return;
       }
 
+      if (this.rearT > 0) {
+        this.rearT = Math.max(0, this.rearT - dt);
+        const rearAttacker = this.rearAttacker;
+        if (!rearAttacker || !rearAttacker.fighting || rearAttacker.dying ||
+            rearAttacker.blown || rearAttacker === foe) {
+          this.rearAttacker = null;
+          this.rearT = 0;
+          this.rearCounterTarget = null;
+        } else if (Math.abs(rearAttacker.x - this.x) <= 150) {
+          this.rearT = Math.max(this.rearT, 0.7);
+        }
+        if (this.rearT <= 0) {
+          this.rearAttacker = null;
+          this.rearCounterTarget = null;
+        }
+      }
+      const rear = this.rearAttacker && this.rearT > 0 ? this.rearAttacker : null;
+      const enemy = rear || foe;
       const dx = enemy.x - this.x;
       const dist = Math.abs(dx);
+      if (this.faceHoldT > 0) this.faceHoldT = Math.max(0, this.faceHoldT - dt);
+      const faceTarget = enemy;
+      const faceDx = faceTarget.x - this.x;
+      const faceDist = Math.abs(faceDx);
       const facingFrozen = c.state === 'knockdown' || c.state === 'getup' || c.state === 'launched' ||
         (c.state === 'strike' && c.leaped);
-      if (dist > 4 && !facingFrozen) this.facing = dx > 0 ? 1 : -1;
+      if (faceDist > 4 && !facingFrozen && this.faceHoldT <= 0) this.facing = faceDx > 0 ? 1 : -1;
 
-      if (dist < 26 && !DOWN_STATES.has(c.state) && !DOWN_STATES.has(enemy.combat.state)) {
+      if (this.support && this.support.flankSide != null) {
+        const target = this.support.target;
+        const gap = this.support.flankDist || 68;
+        this.support.flankX = clamp(target.x + this.support.flankSide * gap, xMin + 4, xMax - 4);
+        if (!rear) {
+          const flankDist = Math.abs(this.support.flankX - this.x);
+          if (flankDist <= 8) {
+            this.support.flankT = 0;
+            this.support.flankLastDist = flankDist;
+          } else {
+            const lastDist = this.support.flankLastDist;
+            if (lastDist == null || lastDist - flankDist >= 1) {
+              this.support.flankT = 0;
+            } else {
+              this.support.flankT = (this.support.flankT || 0) + dt;
+            }
+            this.support.flankLastDist = flankDist;
+            if (this.support.flankT > 0.7) {
+              this.support.flankSide = null;
+              this.support.flankX = null;
+              this.support.flankT = 0;
+              this.support.flankLastDist = null;
+            }
+          }
+        }
+      }
+
+      const flanking = !!(this.support && this.support.flankSide != null &&
+        this.support.flankX != null && !rear &&
+        Math.abs(this.support.flankX - this.x) > 8);
+      if (!flanking && dist < 26 && !DOWN_STATES.has(c.state) && !DOWN_STATES.has(enemy.combat.state)) {
         this.x -= this.facing * (26 - dist) * 0.5;
         this.x = clamp(this.x, xMin, xMax);
       }
 
       if (enemy.blown) {
+        if (this.support) {
+          cancelSupport(this);
+          return;
+        }
+        if (this.chaosFight) {
+          endDuel(this);
+          return;
+        }
         c.state = 'ready';
         c.t = 0;
         c.cd = Math.max(c.cd, 0.2);
@@ -2756,7 +3591,6 @@ import { readStorage, writeStorage } from './storage.js';
       } else {
         this.trail.length = 0;
       }
-      if (c.state !== 'spinkick' && c.spin) c.spin = 0;
 
       if (c.state === 'stagger') {
         if (c.t <= 0) { c.state = 'ready'; c.cd = 0.45 + Math.random() * 0.5; }
@@ -2800,6 +3634,21 @@ import { readStorage, writeStorage } from './storage.js';
       }
 
       if (c.state === 'approach') {
+        if (this.support && this.support.flankSide != null && !rear) {
+          const flankX = this.support.flankX;
+          if (flankX != null) {
+            const toFlank = flankX - this.x;
+            if (Math.abs(toFlank) > 8) {
+              this.facing = Math.sign(toFlank) || this.facing;
+              this.x += this.facing * 110 * this.speedMul * dt;
+              this.x = clamp(this.x, xMin, xMax);
+              return;
+            }
+            c.state = 'ready';
+            c.cd = 0.05;
+            return;
+          }
+        }
         const stopAt = this.style === 'mma' ? 185 : 78;
         if (dist > stopAt) {
           this.x += this.facing * 95 * this.speedMul * dt;
@@ -2886,25 +3735,6 @@ import { readStorage, writeStorage } from './storage.js';
           }
           c.state = 'ready'; c.cd = 0.4;
           c.hitDone = false; c.kickDone = false;
-        }
-        this.x = clamp(this.x, xMin, xMax);
-        return;
-      }
-
-      if (c.state === 'spinkick') {
-        const total = 0.55;
-        const elapsed = total - c.t;
-        c.spin = easeOut(clamp(elapsed / 0.5, 0, 1)) * Math.PI * 2 * this.facing;
-        this.x += this.facing * 60 * dt;
-        if (!c.hitDone && elapsed > 0.18) {
-          c.hitDone = true;
-          this.landHit(enemy, { range: 105, kbx: 210, kdChance: 0.2, freeze: 0.05, shake: 7, starScale: 1.15, damage: 14 });
-        }
-        if (c.t <= 0) {
-          c.spin = 0;
-          c.state = 'ready';
-          c.hitDone = false;
-          c.cd = 0.5 + Math.random() * 0.4;
         }
         this.x = clamp(this.x, xMin, xMax);
         return;
@@ -3147,6 +3977,14 @@ import { readStorage, writeStorage } from './storage.js';
       // ready
       c.cd -= dt;
       if (airborne) return;
+      if (this.support && this.support.flankSide != null && !rear) {
+        const flankX = this.support.flankX;
+        if (flankX != null && Math.abs(flankX - this.x) > 8) {
+          c.state = 'approach';
+          c.cd = 0.05;
+          return;
+        }
+      }
       const eState = enemy.combat.state;
       if (DOWN_STATES.has(eState)) {
         c.cd = 0.12;
@@ -3166,7 +4004,7 @@ import { readStorage, writeStorage } from './storage.js';
         }
         return;
       }
-      if (this.hasPower && this.powerCd <= 0 && dist < 240 && Math.random() < 0.2) {
+      if (this.hasPower && this.powerCd <= 0 && !this.support && !rear && dist < 240 && Math.random() < 0.2) {
         blastFigure(this, enemy, 5 + Math.random() * 3);
         c.state = 'ready';
         c.t = 0;
@@ -3271,14 +4109,14 @@ import { readStorage, writeStorage } from './storage.js';
           } else if (dist > 100) {
             if (r < 0.3) c.state = 'approach';
             else if (r < 0.55) { c.state = 'flyingkick'; c.t = 0.85; c.hitDone = false; c.kickDone = false; }
-            else if (r < 0.7) { c.state = 'spinkick'; c.t = 0.55; c.hitDone = false; c.spin = 0; }
+            else if (r < 0.7) { c.state = 'kick'; c.t = 0.45; c.hitDone = false; }
             else if (r < 0.85) { c.state = 'punch'; c.t = 0.35; c.hitDone = false; }
             else { c.state = 'kick'; c.t = 0.45; c.hitDone = false; }
           } else {
             if (r < 0.16) { c.state = 'punch'; c.t = 0.35; c.hitDone = false; }
             else if (r < 0.28) { c.state = 'kick'; c.t = 0.45; c.hitDone = false; }
             else if (r < 0.4) { c.state = 'combo'; c.t = 0.95; c.hits = 0; }
-            else if (r < 0.52) { c.state = 'spinkick'; c.t = 0.55; c.hitDone = false; c.spin = 0; }
+            else if (r < 0.52) { c.state = 'kick'; c.t = 0.45; c.hitDone = false; }
             else if (r < 0.63) { c.state = 'sweep'; c.t = 0.5; c.hitDone = false; }
             else if (r < 0.73) { c.state = 'uppercut'; c.t = 0.48; c.hitDone = false; }
             else if (r < 0.85) { c.state = 'block'; c.t = 0.4; }
@@ -3304,7 +4142,13 @@ import { readStorage, writeStorage } from './storage.js';
       const landWave = this.landT > 0
         ? -0.045 * Math.exp(-landElapsed * 10) * Math.cos(landElapsed * 24)
         : 0;
-      const s = this.bodyScale * (1 + landWave);
+      const baseScale = this.fighting
+      ? Math.max(1, this.bodyScale)
+      : (this.style === 'brawler' ? Math.max(0.9, this.bodyScale) : this.bodyScale);
+    const rawScale = baseScale * (1 + landWave);
+    const squashScale = this.fighting ? Math.max(1, rawScale) : rawScale;
+    const s = squashScale * this.heightScale;
+    this.visualScale = s;
       const p = this.phase;
       const headR = this.headR * s;
       const f = this.facing;
@@ -3344,7 +4188,6 @@ import { readStorage, writeStorage } from './storage.js';
         }
         else if (cs === 'dodge') lean = -0.18 * f;
         else if (cs === 'flyingkick') lean = 0.45 * f;
-        else if (cs === 'spinkick') lean = 0.15 * f;
         else if (cs === 'sweep') lean = 0.5 * f;
         else if (cs === 'uppercut') lean = 0.08 * f;
         else if (cs === 'combo') lean = 0.18 * f;
@@ -3624,11 +4467,6 @@ import { readStorage, writeStorage } from './storage.js';
             la = -0.9; la2 = 0.35;
             ra = -1.15; ra2 = 0.5;
           }
-        } else if (cs === 'spinkick') {
-          lHip = 1.5; lKnee = -0.08;
-          rHip = -0.3; rKnee = -0.4;
-          la = -0.7 + Math.sin(p * 10) * 0.2; la2 = 0.4;
-          ra = -0.85; ra2 = 0.3;
         } else if (cs === 'sweep') {
           lHip = 1.55; lKnee = -0.05;
           rHip = -0.2; rKnee = -1.2;
@@ -3973,7 +4811,7 @@ import { readStorage, writeStorage } from './storage.js';
       } else if (fightingPose) {
         const cs = this.combat.state;
         if (cs === 'kick' || (cs === 'combo' && (this.combat.comboStep || 0) === 2)) footStyleL = 'point';
-        if (cs === 'flyingkick' || cs === 'spinkick' || cs === 'sweep') footStyleL = footStyleR = 'point';
+        if (cs === 'flyingkick' || cs === 'sweep') footStyleL = footStyleR = 'point';
         if (cs === 'launched' || cs === 'knockdown') footStyleL = footStyleR = 'point';
         if (cs === 'strike' && KICK_MOVE_RE.test(this.combat.move)) footStyleL = 'point';
         if (cs === 'strike' && this.combat.move === 'highkick') { footStyleL = 'flat'; footStyleR = 'point'; }
@@ -4065,7 +4903,7 @@ import { readStorage, writeStorage } from './storage.js';
 
     drawFace(ctx, pose, headR) {
       const { head } = pose;
-      const s = this.bodyScale;
+      const s = this.visualScale || this.bodyScale;
       const f = this.facing;
       const eyeR = this.eyeR * Math.min(1, s + 0.1);
       const mood = this.faceMood();
@@ -4163,7 +5001,7 @@ import { readStorage, writeStorage } from './storage.js';
         if (p.x < minX) minX = p.x;
         if (p.x > maxX) maxX = p.x;
       }
-      const s = this.bodyScale;
+      const s = this.visualScale || this.bodyScale;
       const air = Math.max(0, groundY - this.y);
       const fade = clamp(1 - air / 400, 0, 1);
       const alpha = 0.25 * fade * (this.blown ? 0.45 : 1);
@@ -4208,19 +5046,6 @@ import { readStorage, writeStorage } from './storage.js';
           ctx.lineTo(-f * (22 + len + i * 4), yy);
           ctx.stroke();
         }
-      } else if (cs === 'spinkick') {
-        const a0 = this.combat.spin || 0;
-        ctx.lineWidth = 1.4;
-        for (let i = 0; i < 6; i++) {
-          const a = a0 + (i / 6) * Math.PI * 2;
-          const r0 = 26 + (i % 2) * 7;
-          const r1 = r0 + 18 + (i % 3) * 8;
-          ctx.globalAlpha = 0.34;
-          ctx.beginPath();
-          ctx.moveTo(Math.cos(a) * r0, pose.hip.y + Math.sin(a) * r0);
-          ctx.lineTo(Math.cos(a) * r1, pose.hip.y + Math.sin(a) * r1);
-          ctx.stroke();
-        }
       } else {
         const y = pose.hip.y - 10;
         const len = cs === 'flyingkick' ? 70 : 34;
@@ -4243,7 +5068,7 @@ import { readStorage, writeStorage } from './storage.js';
       const cs = this.fighting ? this.combat.state : '';
       const totals = {
         punch: 0.35, kick: 0.45, combo: 0.95, flurry: FLURRY_TOTAL,
-        sweep: 0.5, uppercut: 0.48, flyingkick: 0.85, spinkick: 0.55
+        sweep: 0.5, uppercut: 0.48, flyingkick: 0.85
       };
       const total = cs === 'strike' ? (STRIKES[this.combat.move]?.total || 0) : totals[cs];
       if (!total) return;
@@ -4408,7 +5233,7 @@ import { readStorage, writeStorage } from './storage.js';
       ctx.globalAlpha = this.dying ? this.dying.alpha : 1;
       this.drawSpeedLines(ctx, pose);
 
-      if ((this.fighting || this.dying) && this.maxHp) {
+      if ((this.fighting || this.dying) && this.maxHp && !this.support) {
         const bw = 40, bh = 5;
         const bx = head.x - bw / 2;
         const by = head.y - headR - 36;
@@ -4949,6 +5774,34 @@ import { readStorage, writeStorage } from './storage.js';
     const f = new StickFigure(x, y, color);
     figures.push(f);
     select(f);
+    f.chaosIdleT = 0;
+    f.chaosStairT = 0;
+    f._chaosLastX = null;
+    f._chaosLastY = null;
+    f.bodyScale = 1;
+    f.landT = 0;
+    if (chaosOn) {
+      chaosCd = 0;
+      updateChaos(0);
+      const colors = new Set(figures.filter(g => !g.dying).map(g => g.color.toLowerCase()));
+      if (colors.size <= 1) {
+        flashStatus('Round over — add an enemy color', 1800);
+      } else if (!f.fighting && !f.support && !f.pursuit && !f.pursuedBy &&
+                 f.vy === 0 && level.floorAt(f.x, f.y) >= 0) {
+        const best = nearestChaosEnemy(f);
+        if (best) {
+          beginPursuit(f, best, {
+            hunt: true,
+            chaos: true,
+            auto: true,
+            allowBlown: true,
+            waitForLanding: true
+          });
+        }
+      }
+    } else if (chaosAutoEnded) {
+      flashStatus('Round over — click Chaos to start a new round', 1800);
+    }
     return f;
   }
 
@@ -5048,13 +5901,103 @@ import { readStorage, writeStorage } from './storage.js';
     if (f.pursuedBy) cancelPursuit(f.pursuedBy);
   }
 
+  function cancelSupport(f) {
+    if (!f || !f.support) return;
+    const target = f.support.target;
+    if (target && target.rearAttacker === f) {
+      target.rearAttacker = null;
+      target.rearT = 0;
+      target.rearCounterTarget = null;
+    }
+    f.support = null;
+    if (f.fighting) f.stopFight();
+  }
+
+  function beginSupport(helper, target, teammate = null) {
+    if (!helper || !target) return false;
+    clearChaosStairExit(helper);
+    if (!chaosOn || helper.dying || helper.blown || helper.dragging) return false;
+    if (!target.fighting || target.dying) return false;
+    if (target.color.toLowerCase() === helper.color.toLowerCase()) return false;
+    if (teammate) {
+      if (!teammate.fighting || teammate.dying) return false;
+      if (target.foe !== teammate || teammate.foe !== target) return false;
+    }
+    const floor = level.floorAt(target.x, target.y);
+    if (floor < 0) return false;
+    if (target.pursuit) cancelPursuit(target);
+    if (target.pursuedBy) {
+      if (target.pursuedBy.pursuit) cancelPursuit(target.pursuedBy);
+      else target.pursuedBy = null;
+    }
+    if (helper.pursuit) cancelPursuit(helper);
+    let flankSide = null;
+    let flankDist = 0;
+    if (teammate) {
+      let slot = 0;
+      for (const f of figures) {
+        if (f !== helper && f.support && f.support.target === target) slot++;
+      }
+      const frontSide = teammate.x <= target.x ? -1 : 1;
+      flankSide = slot % 2 === 0 ? -frontSide : frontSide;
+      flankDist = 62 + Math.floor(slot / 2) * 18;
+    }
+    helper.support = {
+      teammate: teammate || null,
+      target,
+      flankSide,
+      flankDist,
+      flankX: null,
+      flankT: 0,
+      flankLastDist: null
+    };
+    helper.fighting = true;
+    helper.foe = target;
+    helper.chaosFight = false;
+    helper.combatFloor = floor;
+    helper.dying = null;
+    helper.spectating = null;
+    helper.chatting = false;
+    helper.chatPartner = null;
+    helper.bubble = null;
+    helper.behavior = 'idle';
+    helper.phase = 0;
+    helper.vy = 0;
+    helper.y = level.floorY(floor);
+    helper.bodyScale = 1;
+    helper.maxHp = MAX_HP;
+    helper.hp = clamp(helper.hp, 1, MAX_HP);
+    helper.flurryCd = 2.5;
+    helper.dizzyT = 0;
+    helper.rearAttacker = null;
+    helper.rearT = 0;
+    helper.rearCd = 0;
+    helper.rearCounterTarget = null;
+    helper.faceHoldT = 0;
+    helper.combat = createCombatState('ready');
+    helper._lastCombatState = 'idle';
+    helper.duelIntro = null;
+    helper.introRunning = false;
+    helper.trail.length = 0;
+    helper.facing = target.x >= helper.x ? 1 : -1;
+    return true;
+  }
+
   function beginPursuit(attacker, target, opts = {}) {
+    if (!opts.chaos && !opts.assist && !opts.hunt &&
+        chaosAlliance && chaosAlliedColors(attacker.color, target.color)) {
+      breakChaosAlliance('manual');
+    }
+    clearChaosStairExit(attacker);
+    clearChaosStairExit(target);
     cancelChatFor(attacker);
     cancelChatFor(target);
     cancelSpectating(attacker);
     cancelSpectating(target);
-    for (const f of figures) if (f.pursuit) cancelPursuit(f);
-    clearFightPick();
+    if (!opts.chaos && !opts.assist && !opts.hunt) {
+      for (const f of figures) if (f.pursuit) cancelPursuit(f);
+    }
+    if (!opts.assist && !opts.hunt) clearFightPick();
     attacker.pursuit = {
       target,
       t: 0,
@@ -5062,11 +6005,17 @@ import { readStorage, writeStorage } from './storage.js';
       stair: null,
       auto: !!opts.auto,
       allowBlown: !!opts.allowBlown,
-      waitForLanding: !!opts.waitForLanding
+      waitForLanding: !!opts.waitForLanding,
+      chaos: !!opts.chaos,
+      assist: !!opts.assist,
+      hunt: !!opts.hunt,
+      teammate: opts.teammate || null
     };
-    target.pursuedBy = attacker;
-    target.setBehavior('idle');
-    target.think = 999;
+    if (!opts.assist && !opts.hunt) {
+      target.pursuedBy = attacker;
+      target.setBehavior('idle');
+      target.think = 999;
+    }
     attacker.setBehavior('run');
     updateUI();
   }
@@ -5136,11 +6085,14 @@ import { readStorage, writeStorage } from './storage.js';
     )) {
       clearFightPick();
     }
+    const chasers = figures.filter(f => f.pursuit);
+    for (const chaser of chasers) {
+      if (chaser !== selected && !chaser.pursuit.auto) cancelPursuit(chaser);
+    }
     const chaser = figures.find(f => f.pursuit);
-    if (chaser && chaser !== selected && !chaser.pursuit.auto) cancelPursuit(chaser);
     document.body.dataset.selection = has ? 'some' : 'none';
     document.body.dataset.fightPick = fightPick ? 'on' : 'off';
-    document.body.dataset.pursuit = chaser && chaser.pursuit ? 'on' : 'off';
+    document.body.dataset.pursuit = chaser ? 'on' : 'off';
     if (dock) dock.inert = !has;
     for (const btn of actionButtons) {
       btn.disabled = !has;
@@ -5579,15 +6531,30 @@ import { readStorage, writeStorage } from './storage.js';
         updateUI();
       }
       const group = selectionList();
+      const items = group.map(f => ({
+        f,
+        opponent: f.fighting && !f.support ? f.foe : null
+      }));
       for (const f of group) {
         cancelChatFor(f);
         cancelSpectating(f);
+        if (f.support) cancelSupport(f);
         if (f.pursuit) cancelPursuit(f);
         if (f.pursuedBy) cancelPursuit(f.pursuedBy);
         clearDuelIntro(f);
+        f.rearAttacker = null;
+        f.rearT = 0;
+        f.rearCd = 0;
+        f.rearCounterTarget = null;
+        f.faceHoldT = 0;
       }
       for (const f of group) f.dragging = true;
-      drag = { moved: false, sx: x, sy: y, items: group.map(f => ({ f, x: f.x, y: f.y })) };
+      drag = {
+        moved: false,
+        sx: x,
+        sy: y,
+        items: items.map(it => ({ ...it, x: it.f.x, y: it.f.y }))
+      };
       canvas.setPointerCapture(e.pointerId);
       canvas.style.cursor = 'grabbing';
       updateUI();
@@ -5631,12 +6598,31 @@ import { readStorage, writeStorage } from './storage.js';
 
   function endDrag(e) {
     if (drag) {
+      const rematches = [];
       for (const it of drag.items) {
-        it.f.dragging = false;
-        it.f.vy = 0;
+        const f = it.f;
+        f.dragging = false;
+        f.bodyScale = 1;
+        f.landT = 0;
+        f.vy = 0;
+        if (f.fighting) endDuel(f);
+        f.y = level.surfaceAt(f.x, f.y + 8);
+        const foe = it.opponent;
+        if (!foe || foe.dying || foe.dragging || foe.blown) continue;
+        if (rematches.some(([a, b]) =>
+          (a === f && b === foe) || (a === foe && b === f))) continue;
+        rematches.push([f, foe]);
       }
       drag = null;
       canvas.style.cursor = 'default';
+      for (const [a, b] of rematches) {
+        if (a.dying || b.dying || a.dragging || b.dragging || a.blown || b.blown) continue;
+        const af = level.floorAt(a.x, a.y);
+        const bf = level.floorAt(b.x, b.y);
+        if (af < 0 || bf < 0) continue;
+        if (af === bf) startDuel(a, b);
+        else beginPursuit(a, b);
+      }
       updateUI();
       return;
     }
