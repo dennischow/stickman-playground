@@ -12,6 +12,7 @@ Built with vanilla JavaScript and the Canvas 2D API, bundled with Vite. No game 
 - **Individual movement** — each figure gets its own walk/run speed, jump height, crouch timing, and landing rest, so a crowd never moves in lockstep.
 - **Motion polish** — smoothed frame-to-frame velocity drives subtle head, torso, and arm lag; landings squash and settle; footsteps kick up dust; fast strikes leave short smear arcs. All of it respects `prefers-reduced-motion`.
 - **Autonomous mode** — figures randomly switch actions on their own, each with a randomized "think" timer.
+- **Chaos mode** — a top-bar toggle pairs every eligible figure into same-floor duels with randomly assigned, mismatched styles. Chaos fights start on their own, survivors re-pair, and turning it off ends only the duels Chaos started. Like manual fights, Chaos only pairs different-colored figures, so an odd leftover or a color imbalance can stay unpaired, and same-colored crowds stay allies instead of fighting each other.
 - **Ambient chatter** — idle figures on the same floor occasionally face each other and trade a short speech-bubble exchange, with style-specific lines for Wing Chun, Muay Thai, MMA, and Brawler. A figure may also walk over to start the conversation. Only one conversation runs at a time.
 - **Fight spectators** — bystanders on the same floor sometimes wander over to watch a duel, comment on the action, and drift back to their own business when it ends.
 - **Living sky** — the paper sky carries a sun and moon on a local 24-hour orbit, plus occasional drifting bird flocks. Night is a deep blue-violet, the celestial bodies fade near the horizon, and the birds thin out at night.
@@ -22,7 +23,7 @@ Built with vanilla JavaScript and the Canvas 2D API, bundled with Vite. No game 
 - **Comic impact feel** — sprite-based dust and ink, persistent ground splats, starbursts, manga sound-effect words (`BAM`, `WHACK`, `DOWN!`, `K.O.`, `BOOM`) that fade out early so they never hide the action, tinted flashes, and hit-stop.
 - **Synthesized audio** — a small WebAudio engine generates whooshes, impacts, footsteps, jumps, landings, blasts, and K.O. sounds. No audio files, with stereo panning by on-screen position and a persisted mute setting.
 - **Cinematic camera** — a damped camera adds gentle idle framing, duel intro push-in, fight follow, K.O. focus, death rise, and blast tracking, with letterbox bars and a persisted toggle. Pointer input is inverse-transformed, so selection and dragging stay accurate while the camera moves.
-- **Multi-level stage** — a paper/ink mezzanine and staircase give the playground vertical space: figures climb stairs, jump between floors, fall off edges, and can be dragged onto either level. Duels lock to one floor once they start; challenging someone across floors sends the attacker up or down the stairs — or off the mezzanine edge — first.
+- **Multi-level stage** — a paper/ink mezzanine and a left-side second-floor loft connected by a switchback staircase give the playground vertical space: figures climb stairs, jump between floors, fall off edges, and can be dragged onto any level. Duels lock to one floor once they start; challenging someone across floors sends the attacker up or down the stairs — or off a floor edge — first.
 - **Six scenes** — blank paper plus five photo backgrounds (lake, factory, bridge, highway, floating island), desaturated behind a paper veil. The selection persists via `localStorage`.
 - **Selection & dragging** — click, shift/meta/ctrl-click to multi-select, drag to move a group, or marquee box-select.
 - **Remove figures** — select one or more figures and use the trash button in the selection chip, or press `Delete` / `Backspace`, to remove them. The playground can be emptied and Add still works.
@@ -78,7 +79,7 @@ npm run check     # syntax-check the JavaScript modules
 
 ### Toolbar
 
-The top bar holds the always-relevant controls: **Add**, **Autonomous**, **Scene**, **Sound**, and **Cinematic**. The selection chip beside the wordmark shows the current selection, its color swatch, the superpower state, a small × to revoke the power, and a trash button to remove the selection.
+The top bar holds the always-relevant controls: **Add**, **Autonomous**, **Chaos**, **Scene**, **Sound**, and **Cinematic**. The selection chip beside the wordmark shows the current selection, its color swatch, the superpower state, a small × to revoke the power, and a trash button to remove the selection.
 
 Selection actions live in a floating dock at the bottom of the screen. It appears whenever a figure is selected and sits inside the cinematic letterbox bar when cinematic mode is on:
 
@@ -95,7 +96,7 @@ The game loop, rendering, physics, AI, and input live in [`src/main.js`](src/mai
 The `frame()` loop in [`src/main.js`](src/main.js) uses `requestAnimationFrame` with a delta capped at 50 ms to avoid huge jumps after tab switches. Each frame it:
 
 1. Scales the timestep for hit-stop or slow-motion.
-2. Advances figure physics, ambient chatter, bird flocks, timed effects, and persistent splats, then flushes any figures whose death sequence has finished.
+2. Advances figure physics, Chaos pairing, ambient chatter, bird flocks, timed effects, and persistent splats, then flushes any figures whose death sequence has finished.
 3. Caches one pose per figure for the frame.
 4. Updates the cinematic framing target and damps the camera toward it.
 5. Repaints the cached scene only when it is dirty or the local minute changes.
@@ -116,7 +117,7 @@ Frame-to-frame position changes are smoothed into per-figure velocity and accele
 
 ### Combat state machine
 
-When two figures of different colors fight, `startDuel()` locks them to the attacker's floor and points them at each other; knockback stays inside that floor's bounds. Enemies on other floors are still valid targets: pressing **Fight** starts a single active chase, and the attacker runs to the staircase (or the nearest mezzanine edge), climbs, descends, or drops, and closes in while the target waits and faces them. A chase cancels after a few seconds with `Can't reach`, on `Esc`/`F`, when either figure is dragged or blasted, or when the selection changes. `updateFight()` runs a per-figure state machine:
+When two figures of different colors fight, `startDuel()` locks them to the attacker's floor and points them at each other; knockback stays inside that floor's bounds. Enemies on other floors are still valid targets: pressing **Fight** starts a single active chase, and the attacker runs to the nearest staircase (or a floor edge), climbs, descends, or drops, and closes in while the target waits and faces them. A chase cancels after a few seconds with `Can't reach`, on `Esc`/`F`, when either figure is dragged or blasted, or when the selection changes. `updateFight()` runs a per-figure state machine:
 
 ```
 ready → approach → punch / kick / combo / spinkick / sweep / uppercut / flyingkick
@@ -136,11 +137,15 @@ When Autonomous is on, two idle figures on the same floor can strike up a short 
 
 ### Fight spectators
 
-When a duel starts and Autonomous is on, up to two bystanders on the same floor may walk over to watch. They pick a viewing spot outside the pair, on their own side of the action so they do not walk through the fight, and stay out of combat. Spectators face the fighters and occasionally comment in a speech bubble, using generic lines or style-aware lines such as “Keep the centerline!” and “Elbows up!”. Only one spectator comment appears at a time. When the duel ends they linger for a moment, possibly say a final line, and then return to normal wandering. Spectators are cancelled if they are dragged, blasted, challenged, pulled into a chase, or if Autonomous is turned off.
+When a duel starts and Autonomous is on, up to two bystanders on the same floor may walk over to watch. They pick a viewing spot outside the pair, on their own side of the action so they do not walk through the fight, and stay out of combat. Spectators face the fighters and occasionally comment in a speech bubble, using generic lines or style-aware lines such as “Keep the centerline!” and “Elbows up!”. Only one spectator comment appears at a time. When the duel ends they linger for a moment, possibly say a final line, and then return to normal wandering. Spectators are cancelled if they are dragged, blasted, challenged, pulled into a chase, or if Autonomous is turned off. Spectator assignment pauses while Chaos is on, since the single-headline-duel model does not fit several fights at once.
+
+### Chaos mode
+
+The **Chaos** button in the top bar turns the playground into a running brawl. While it is on, `updateChaos()` tries to keep every eligible figure fighting in complete pairs. It only pairs figures on the same floor, skips anyone who is jumping, dragging, blown, chatting, spectating, chasing, or already dueling, and starts pairs over a short interval so the fights erupt one after another. Each new pair gets two random styles that are guaranteed to differ. Like manual **Fight** targeting, Chaos only pairs figures of different colors, so same-colored figures remain allies and a crowd with only one color will not break into a civil war. An odd figure or an unbalanced color split can therefore leave some figures unpaired; everyone who can form a cross-color pair fights. Unpaired figures keep wandering under Autonomous, but chatter and spectator assignment are paused while Chaos is on. Turning Chaos off ends every duel that it started, restores normal chatter and spectators, and leaves the assigned styles in place.
 
 ### Superpower
 
-`blastFigure()` pushes the caster back, resets the target, and puts it into a `blown` sequence: it flies across the screen, hits the wall with a burst and `BAM`/`WHAM` text, falls, lies down, then gets up. Blasts trigger brief slow-motion, a gold flash, an ink splat, and screen shake. Blasting a fighter also subtracts 20 HP; if that empties the bar, the target dies instead of being blown. The dock's **Give Power** button is a toggle: once the figure has the power it becomes **Remove Power**, and **Blast** becomes available. `P` toggles the power, `B` blasts, and `R` revokes it. During a chase, **Blast** targets the chased figure specifically, giving the attacker a cross-floor ranged option.
+`blastFigure()` pushes the caster back, resets the target, and puts it into a `blown` sequence: it flies across the screen, hits the wall with a burst and `BAM`/`WHAM` text, falls, lies down, then gets up. Blasts trigger brief slow-motion, a gold flash, an ink splat, and screen shake. Blasting a fighter also subtracts 20 HP; if that empties the bar, the target dies instead of being blown. If the blast rings a fighter off the mezzanine or second floor, the locked duel ends and the remaining fighter automatically chases to the landing floor, then resumes the fight once the target gets up. The dock's **Give Power** button is a toggle: once the figure has the power it becomes **Remove Power**, and **Blast** becomes available. `P` toggles the power, `B` blasts, and `R` revokes it. During a chase, **Blast** targets the chased figure specifically, giving the attacker a cross-floor ranged option.
 
 ### Scenes
 
@@ -152,9 +157,9 @@ The sky follows the viewer's local time: the sun and moon ride a 24-hour orbit, 
 
 ### Level and surfaces
 
-[`src/level.js`](src/level.js) defines the stage geometry: a ground floor, a back-right mezzanine, and a staircase connecting them. `surfaceAt(x, currentY)` returns the walkable height under a figure with a small step-up tolerance, `floorAt(x, y)` identifies the ground, mezzanine, or stairs, and `floorBounds(floor)` keeps duels on their floor. Stairs collide as a smooth ramp but draw as discrete steps, so feet follow the climb without stair-stepping jitter.
+[`src/level.js`](src/level.js) defines the stage geometry: a ground floor, a back-right mezzanine, and a left-side second-floor loft, connected by a lower staircase and a switchback upper staircase. `surfaceAt(x, currentY)` returns the walkable height under a figure with a small step-up tolerance, `floorAt(x, y)` identifies the ground, mezzanine, loft, or stairs, and `floorBounds(floor)` keeps duels on their floor. Stairs collide as a smooth ramp but draw as discrete steps, so feet follow the climb without stair-stepping jitter.
 
-Figures query the level every frame instead of using a fixed ground line. Walking follows the surface, jumps and falls land on the surface below, and walking off the mezzanine edge drops to the ground. Dragging can place figures on either level; dropping over an edge falls. The level is drawn into the cached scene, so it works over both plain paper and the photo backgrounds. New ground figures spawn clear of the staircase footprint.
+Figures query the level every frame instead of using a fixed ground line. Walking follows the surface, jumps and falls land on the surface below, and walking off a floor edge drops to the level beneath. Dragging can place figures on any level; dropping over an edge falls. The level is drawn into the cached scene, so it works over both plain paper and the photo backgrounds. New ground figures spawn clear of the staircase footprint.
 
 ### Cinematic camera
 
@@ -164,6 +169,7 @@ Figures query the level every frame instead of using a fixed ground line. Walkin
 - **Duel intro** — a short push-in on both fighters.
 - **Fight follow** — keeps both active fighters in frame.
 - **Target picking / chase** — frames the attacker together with every valid target, then follows the chase pair across the stairs.
+- **Chaos fights** — frames all active fighters; while several duels are running, new-pair intro push-ins and K.O. jumps are suppressed so the camera does not whip between fights.
 - **K.O. focus** — pushes in on a knocked-down figure, and holds a longer follow on a dying fighter as the body rises.
 - **Blast focus** — tracks from the caster toward the target.
 

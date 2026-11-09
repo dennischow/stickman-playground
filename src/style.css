@@ -107,6 +107,18 @@
   }
   label.auton-label input { accent-color: var(--ink); cursor: pointer; }
   .auton-short { display: none; }
+  #chaosBtn {
+    font-weight: 600; letter-spacing: 0.03em;
+  }
+  #chaosBtn[aria-pressed="true"] {
+    background: #a12a22; border-color: #a12a22; color: var(--paper);
+  }
+  #chaosBtn[aria-pressed="true"]:hover:not(:disabled) {
+    background: #8a221b; border-color: #8a221b;
+  }
+  #chaosBtn[aria-pressed="true"]:active:not(:disabled) {
+    background: #721b15; border-color: #721b15;
+  }
   input[type="color"] {
     width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%;
     background: transparent; cursor: pointer; flex-shrink: 0;

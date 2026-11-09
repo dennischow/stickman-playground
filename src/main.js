@@ -24,6 +24,7 @@ import { readStorage, writeStorage } from './storage.js';
   const removeBtn = document.getElementById('removeBtn');
   const muteBtn = document.getElementById('muteBtn');
   const autonChk = document.getElementById('autonChk');
+  const chaosBtn = document.getElementById('chaosBtn');
   const sceneSelect = document.getElementById('sceneSelect');
   const cinematicBtn = document.getElementById('cinematicBtn');
   const toolbar = document.getElementById('toolbar');
@@ -66,6 +67,8 @@ import { readStorage, writeStorage } from './storage.js';
   let marquee = null;
   let fightPick = null;
   let lastPointer = null;
+  let chaosOn = false;
+  let chaosCd = 0;
   const bg = '#f7f6f2';
 
   const STYLES = {
@@ -75,6 +78,8 @@ import { readStorage, writeStorage } from './storage.js';
     mma: 'MMA',
     shaolin: 'Shaolin'
   };
+  const CHAOS_RATIO = 1;
+  const CHAOS_STYLES = Object.keys(STYLES);
   const STYLE_COMBAT = {
     wingchun: { defend: 0.085, block: 0.72, blockT: 0.3, recoverMin: 0.16, recoverJitter: 0.18 },
     muaythai: { defend: 0.06, block: 0.52, blockT: 0.45, recoverMin: 0.35, recoverJitter: 0.35 },
@@ -704,6 +709,7 @@ import { readStorage, writeStorage } from './storage.js';
 
   function cineStartDuel(a, b) {
     if (!cinematicOn || reduceMotion) return;
+    if (chaosOn && figures.some(f => f.fighting && f !== a && f !== b)) return;
     cine.introT = CINE_INTRO;
     cine.introA = a;
     cine.introB = b;
@@ -715,6 +721,7 @@ import { readStorage, writeStorage } from './storage.js';
 
   function cineKO(f) {
     if (!cinematicOn || reduceMotion) return;
+    if (chaosOn && figures.some(o => o.fighting && o !== f && !o.dying)) return;
     cine.koT = CINE_KO;
     cine.koFig = f;
   }
@@ -1282,7 +1289,7 @@ import { readStorage, writeStorage } from './storage.js';
     }
   }
 
-  function startDuel(a, b) {
+  function startDuel(a, b, opts = {}) {
     cancelChatFor(a);
     cancelChatFor(b);
     cancelPursuitsFor(a);
@@ -1293,13 +1300,16 @@ import { readStorage, writeStorage } from './storage.js';
     const floor = level.floorAt(a.x, a.y);
     a.combatFloor = floor;
     b.combatFloor = floor;
-    const floorY = floor === 1 ? level.mezzY : level.groundY;
+    const floorY = level.floorY(floor);
     a.y = floorY;
     b.y = floorY;
     a.vy = 0;
     b.vy = 0;
     a.startFight(b);
     b.startFight(a);
+    const chaosFight = !!opts.chaos;
+    a.chaosFight = chaosFight;
+    b.chaosFight = chaosFight;
     a.trail.length = 0; b.trail.length = 0;
     const kicker = Math.random() < 0.5 ? a : b;
     const intro = {
@@ -1345,6 +1355,92 @@ import { readStorage, writeStorage } from './storage.js';
     }
   }
 
+  function chaosEligible(f) {
+    if (!f || f.fighting || f.dying || f.dragging || f.blown) return false;
+    if (f.pursuit || f.pursuedBy || f.chatting || f.spectating) return false;
+    if (f.vy !== 0) return false;
+    if (level.isOnAnyStairPath(f.x, f.y)) return false;
+    return level.floorAt(f.x, f.y) >= 0;
+  }
+
+  function startChaosPair(a, b) {
+    const floor = level.floorAt(a.x, a.y);
+    if (floor < 0 || level.floorAt(b.x, b.y) !== floor) return false;
+    if (a.color.toLowerCase() === b.color.toLowerCase()) return false;
+    a.style = pick(CHAOS_STYLES);
+    const altStyles = CHAOS_STYLES.filter(style => style !== a.style);
+    b.style = pick(altStyles.length ? altStyles : CHAOS_STYLES);
+    startDuel(a, b, { chaos: true });
+    return true;
+  }
+
+  function updateChaos(dt) {
+    if (!chaosOn) return;
+    const living = figures.filter(f => !f.dying);
+    if (living.length < 2) return;
+    const target = Math.max(2, 2 * Math.floor((living.length * CHAOS_RATIO) / 2));
+    const active = figures.filter(f => f.fighting && f.foe && !f.dying).length;
+    if (active >= target) return;
+    chaosCd -= dt;
+    if (chaosCd > 0) return;
+    chaosCd = 0.22 + Math.random() * 0.24;
+
+    const byFloor = new Map();
+    for (const f of figures) {
+      if (!chaosEligible(f)) continue;
+      const floor = level.floorAt(f.x, f.y);
+      if (!byFloor.has(floor)) byFloor.set(floor, []);
+      byFloor.get(floor).push(f);
+    }
+    const pairs = [];
+    for (const list of byFloor.values()) {
+      for (let i = 0; i < list.length - 1; i++) {
+        for (let j = i + 1; j < list.length; j++) {
+          if (list[i].color.toLowerCase() !== list[j].color.toLowerCase()) {
+            pairs.push([list[i], list[j]]);
+          }
+        }
+      }
+    }
+    if (!pairs.length) return;
+    const [a, b] = pick(pairs);
+    startChaosPair(a, b);
+  }
+
+  function syncChaosUI() {
+    if (chaosBtn) {
+      chaosBtn.setAttribute('aria-pressed', chaosOn ? 'true' : 'false');
+      chaosBtn.title = chaosOn
+        ? 'Chaos mode is on — click to restore order'
+        : 'Chaos mode: all possible cross-color pairs fight';
+    }
+    document.body.dataset.chaos = chaosOn ? 'on' : 'off';
+  }
+
+  function setChaos(on) {
+    const next = !!on;
+    if (next === chaosOn) return;
+    chaosOn = next;
+    chaosCd = 0;
+    if (chaosOn) {
+      cancelFightPick();
+      cancelChat();
+      for (const f of figures) {
+        cancelSpectating(f);
+        if (f.pursuit) cancelPursuit(f);
+      }
+      flashStatus('CHAOS!', 1400);
+      updateChaos(0);
+    } else {
+      for (const f of [...figures]) {
+        if (f.chaosFight && f.fighting) endDuel(f);
+      }
+      chatCd = 8 + Math.random() * 7;
+      flashStatus('Order restored', 1500);
+    }
+    syncChaosUI();
+  }
+
   function beginDeath(f, killer) {
     if (!f || f.dying) return;
     cancelChatFor(f);
@@ -1388,7 +1484,7 @@ import { readStorage, writeStorage } from './storage.js';
   }
 
   function assignSpectators(a, b) {
-    if (!autonChk.checked) return;
+    if (chaosOn || !autonChk.checked) return;
     const floor = level.floorAt(a.x, a.y);
     if (floor < 0 || level.floorAt(b.x, b.y) !== floor) return;
     const mid = (a.x + b.x) / 2;
@@ -1398,12 +1494,12 @@ import { readStorage, writeStorage } from './storage.js';
     const leftRoom = minX - bounds.x0;
     const rightRoom = bounds.x1 - maxX;
     const roomier = leftRoom >= rightRoom ? -1 : 1;
-    const floorY = floor === 1 ? level.mezzY : level.groundY;
+    const floorY = level.floorY(floor);
     const baseFor = side => side < 0 ? minX - 95 : maxX + 95;
     const clampSpot = x => clamp(x, bounds.x0 + 24, bounds.x1 - 24);
     const validSpot = (x, side) => {
       if (x < bounds.x0 + 16 || x > bounds.x1 - 16) return false;
-      if (level.isOnStairs(x)) return false;
+      if (level.isOnAnyStairPath(x, floorY)) return false;
       if (floor === 0 && x >= level.stairX0 - 8 && x <= level.stairX1 + 8) return false;
       if (side < 0 && x > minX - 30) return false;
       if (side > 0 && x < maxX + 30) return false;
@@ -1431,7 +1527,7 @@ import { readStorage, writeStorage } from './storage.js';
       if (f === a || f === b) return false;
       if (f.dying || f.fighting || f.pursuit || f.pursuedBy || f.blown || f.dragging || f.chatting || f.spectating) return false;
       if (f.behavior === 'jump' || f.vy !== 0) return false;
-      if (level.floorAt(f.x, f.y) !== floor || level.isOnStairs(f.x)) return false;
+      if (level.floorAt(f.x, f.y) !== floor || level.isOnAnyStairPath(f.x, f.y)) return false;
       const dist = Math.abs(f.x - mid);
       if (dist < 120 || dist > 450) return false;
       if (floor === 0) {
@@ -1551,6 +1647,17 @@ import { readStorage, writeStorage } from './storage.js';
       beginDeath(target, caster);
       flashStatus('Blast!', 1000);
       return;
+    }
+    const partner = target.foe && target.foe.fighting && target.foe.foe === target ? target.foe : null;
+    const combatFloor = target.combatFloor;
+    const wallX = dir < 0 ? EDGE_MARGIN : W - EDGE_MARGIN;
+    const ringOut = target.fighting && combatFloor !== null &&
+      level.floorAt(wallX, level.floorY(combatFloor)) !== combatFloor;
+    if (ringOut) {
+      endDuel(target);
+      if (partner) {
+        beginPursuit(partner, target, { auto: true, allowBlown: true, waitForLanding: true });
+      }
     }
     target.resetCombat();
     target.dizzyT = DIZZY_TIME;
@@ -1675,6 +1782,7 @@ import { readStorage, writeStorage } from './storage.js';
       this.eyeR = 4.5;
       this.fighting = false;
       this.foe = null;
+      this.chaosFight = false;
       this.duelIntro = null;
       this.introRunning = false;
       this._introStep = 0;
@@ -1756,6 +1864,7 @@ import { readStorage, writeStorage } from './storage.js';
       clearDuelIntro(this);
       this.fighting = false;
       this.foe = null;
+      this.chaosFight = false;
       this.combatFloor = null;
       this.trail.length = 0;
       this.combat = createCombatState('idle', 0);
@@ -1812,7 +1921,7 @@ import { readStorage, writeStorage } from './storage.js';
 
     _surfaceY(level) {
       if (this.fighting && this.combatFloor !== null && !this.blown) {
-        return this.combatFloor === 1 ? level.mezzY : level.groundY;
+        return level.floorY(this.combatFloor);
       }
       return level.surfaceAt(this.x, this.y);
     }
@@ -1874,6 +1983,10 @@ import { readStorage, writeStorage } from './storage.js';
     _spectate(dt, level) {
       const s = this.spectating;
       if (!s) return;
+      if (chaosOn) {
+        cancelSpectating(this);
+        return;
+      }
       if (!autonChk.checked) {
         cancelSpectating(this);
         return;
@@ -1966,8 +2079,19 @@ import { readStorage, writeStorage } from './storage.js';
       const p = this.pursuit;
       if (!p) return;
       const target = p.target;
-      if (!target || target.pursuedBy !== this || target.blown || target.dragging || target.fighting) {
+      if (!target || target.pursuedBy !== this || target.dragging || target.fighting ||
+          (target.blown && !p.allowBlown)) {
         cancelPursuit(this);
+        return;
+      }
+      if (target.blown && p.waitForLanding &&
+          (target.blown.phase === 'fly' || target.blown.phase === 'fall')) {
+        this.behavior = 'idle';
+        this.facing = target.x < this.x ? -1 : 1;
+        this.vy = 0;
+        this.y = pursuitSurfaceY(level, this.x, this.y);
+        this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 10));
+        this.phase += dt * 1.6;
         return;
       }
       p.t += dt;
@@ -1999,19 +2123,65 @@ import { readStorage, writeStorage } from './storage.js';
         this.phase += dt * 6;
         return;
       }
-      if (myFloor >= 0 && myFloor === targetFloor && Math.abs(target.x - this.x) <= 90) {
+      if (target.blown && myFloor >= 0 && myFloor === targetFloor &&
+          Math.abs(target.x - this.x) <= 90) {
+        this.behavior = 'idle';
+        this.facing = target.x < this.x ? -1 : 1;
+        this.vy = 0;
+        this.y = pursuitSurfaceY(level, this.x, this.y);
+        this.bodyScale = lerp(this.bodyScale, 1, Math.min(1, dt * 10));
+        this.phase += dt * 1.6;
+        return;
+      }
+      if (myFloor >= 0 && myFloor === targetFloor && Math.abs(target.x - this.x) <= 90 && !target.blown) {
         startDuel(this, target);
         return;
       }
       let goalX;
-      if (myFloor === 1 && targetFloor === 0 && target.x >= level.mezzX0) {
-        goalX = level.mezzX1 + 24;
-      } else if (myFloor < 0) {
-        goalX = targetFloor === 1 ? level.stairX1 + 4 : level.stairX0 - 4;
-      } else if (myFloor !== targetFloor) {
-        goalX = myFloor === 0 ? level.stairX0 + 4 : level.stairX1 - 4;
+      let useUpper = null;
+      if (myFloor < 0) {
+        const lowerDist = level.isOnStairs(this.x)
+          ? Math.abs(this.y - level.stairsYAt(this.x))
+          : Infinity;
+        const upperDist = level.isOnUpperStairs(this.x)
+          ? Math.abs(this.y - level.upperStairsYAt(this.x))
+          : Infinity;
+        const onLower = lowerDist <= 22;
+        const onUpper = upperDist <= 22;
+        if (p.stair === 'lower' && !onLower) p.stair = null;
+        if (p.stair === 'upper' && !onUpper) p.stair = null;
+        if (!p.stair) {
+          if (onUpper && onLower) {
+            p.stair = targetFloor >= 2 ? 'upper'
+              : targetFloor <= 0 ? 'lower'
+                : (upperDist <= lowerDist ? 'upper' : 'lower');
+          } else if (onUpper) {
+            p.stair = 'upper';
+          } else if (onLower) {
+            p.stair = 'lower';
+          }
+        }
+        useUpper = p.stair === 'upper';
+        if (useUpper) {
+          goalX = targetFloor >= 2 ? level.upperStairX0 - 4 : level.upperStairX1 + 4;
+        } else {
+          goalX = targetFloor >= 1 ? level.stairX1 + 4 : level.stairX0 - 4;
+        }
       } else {
-        goalX = target.x;
+        p.stair = null;
+        if (myFloor === 1 && targetFloor === 0 && target.x >= level.mezzX0) {
+          goalX = level.mezzX1 + 24;
+        } else if (myFloor !== targetFloor) {
+          if (myFloor === 0) {
+            goalX = level.stairX1 + 4;
+          } else if (myFloor === 1) {
+            goalX = targetFloor === 2 ? level.upperStairX1 - 4 : level.stairX1 - 4;
+          } else {
+            goalX = level.upperStairX0 + 4;
+          }
+        } else {
+          goalX = target.x;
+        }
       }
       const dir = Math.sign(goalX - this.x) || this.facing;
       this.facing = dir;
@@ -2029,7 +2199,7 @@ import { readStorage, writeStorage } from './storage.js';
         this.y = level.mezzY;
         return;
       }
-      this.y = pursuitSurfaceY(level, this.x, this.y);
+      this.y = pursuitSurfaceY(level, this.x, this.y, useUpper);
       this.vy = 0;
       const stride = Math.PI * 2;
       const stepIdx = Math.floor(this.phase / stride);
@@ -2460,7 +2630,7 @@ import { readStorage, writeStorage } from './storage.js';
 
     updateFight(dt, level) {
       const groundY = this._surfaceY(level);
-      const fb = level.floorBounds(this.combatFloor === 1 ? 1 : 0);
+      const fb = level.floorBounds(this.combatFloor ?? 0);
       const xMin = fb.x0;
       const xMax = fb.x1;
       const c = this.combat;
@@ -4461,7 +4631,7 @@ import { readStorage, writeStorage } from './storage.js';
       !f.blown && !f.dragging && !f.spectating && !f.dying &&
       f.behavior !== 'jump' &&
       f.chatCd <= 0 && f.vy === 0 &&
-      level.floorAt(f.x, f.y) >= 0 && !level.isOnStairs(f.x) &&
+      level.floorAt(f.x, f.y) >= 0 && !level.isOnAnyStairPath(f.x, f.y) &&
       Math.abs(f.y - level.surfaceAt(f.x, f.y)) <= 18;
   }
 
@@ -4495,10 +4665,14 @@ import { readStorage, writeStorage } from './storage.js';
   function findChatApproach() {
     if (!autonChk.checked || fightPick) return null;
     const pairs = collectChatPairs(120, 600, (a, b, floor) => {
-      if (floor !== 0) return true;
       const mid = (a.x + b.x) / 2;
-      if (mid < level.stairX0 && Math.max(a.x, b.x) >= level.stairX0) return false;
-      if (mid > level.stairX1 && Math.min(a.x, b.x) <= level.stairX1) return false;
+      if (floor === 0) {
+        if (mid < level.stairX0 && Math.max(a.x, b.x) >= level.stairX0) return false;
+        if (mid > level.stairX1 && Math.min(a.x, b.x) <= level.stairX1) return false;
+      } else if (floor === 1) {
+        if (mid < level.upperStairX0 && Math.max(a.x, b.x) >= level.upperStairX0) return false;
+        if (mid > level.upperStairX1 && Math.min(a.x, b.x) <= level.upperStairX1) return false;
+      }
       return true;
     });
     return pairs.length ? pick(pairs) : null;
@@ -4561,6 +4735,10 @@ import { readStorage, writeStorage } from './storage.js';
   }
 
   function updateChat(dt) {
+    if (chaosOn) {
+      if (chat) cancelChat();
+      return;
+    }
     if (!autonChk.checked) {
       cancelChat();
       return;
@@ -4791,16 +4969,30 @@ import { readStorage, writeStorage } from './storage.js';
     return level.floorAt(f.x, f.y);
   }
 
-  function pursuitSurfaceY(level, x, y) {
+  function pursuitSurfaceY(level, x, y, preferUpper = null) {
+    if (preferUpper === true && level.isOnUpperStairs(x)) {
+      const rampY = level.upperStairsYAt(x);
+      if (Math.abs(rampY - y) <= 22) return rampY;
+    }
+    if (preferUpper === false && level.isOnStairs(x)) {
+      const rampY = level.stairsYAt(x);
+      if (Math.abs(rampY - y) <= 22) return rampY;
+    }
     if (level.isOnStairs(x)) {
       const rampY = level.stairsYAt(x);
+      if (Math.abs(rampY - y) <= 22) return rampY;
+    }
+    if (level.isOnUpperStairs(x)) {
+      const rampY = level.upperStairsYAt(x);
       if (Math.abs(rampY - y) <= 22) return rampY;
     }
     return level.surfaceAt(x, y + 8);
   }
 
   function pursuitFloor(level, x, y) {
-    if (level.isOnStairs(x) && Math.abs(y - level.stairsYAt(x)) <= 22) return -1;
+    if (x >= level.level2X0 && x <= level.level2X1 && Math.abs(y - level.level2Y) <= 10) return 2;
+    if (level.onUpperStairPath(x, y, 14)) return -1;
+    if (level.onLowerStairPath(x, y, 14)) return -1;
     if (x >= level.mezzX0 && x <= level.mezzX1 && Math.abs(y - level.mezzY) <= 10) return 1;
     if (Math.abs(y - level.groundY) <= 10) return 0;
     return -1;
@@ -4825,7 +5017,7 @@ import { readStorage, writeStorage } from './storage.js';
       f.isEnemy(o) &&
       !o.fighting && !o.blown && !o.dragging &&
       !o.pursuit && !o.pursuedBy && !o.dying &&
-      level.isOnStairs(o.x)
+      level.isOnAnyStairPath(o.x, o.y)
     );
   }
 
@@ -4835,7 +5027,7 @@ import { readStorage, writeStorage } from './storage.js';
     if (target.fighting) return 'Already fighting';
     if (target.blown || target.dragging) return 'Unavailable';
     if (target.pursuit || target.pursuedBy) return 'Already busy';
-    if (level.isOnStairs(target.x)) return 'Target on stairs';
+    if (level.isOnAnyStairPath(target.x, target.y)) return 'Target on stairs';
     return 'Pick another target';
   }
 
@@ -4856,14 +5048,22 @@ import { readStorage, writeStorage } from './storage.js';
     if (f.pursuedBy) cancelPursuit(f.pursuedBy);
   }
 
-  function beginPursuit(attacker, target) {
+  function beginPursuit(attacker, target, opts = {}) {
     cancelChatFor(attacker);
     cancelChatFor(target);
     cancelSpectating(attacker);
     cancelSpectating(target);
     for (const f of figures) if (f.pursuit) cancelPursuit(f);
     clearFightPick();
-    attacker.pursuit = { target, t: 0, drop: false };
+    attacker.pursuit = {
+      target,
+      t: 0,
+      drop: false,
+      stair: null,
+      auto: !!opts.auto,
+      allowBlown: !!opts.allowBlown,
+      waitForLanding: !!opts.waitForLanding
+    };
     target.pursuedBy = attacker;
     target.setBehavior('idle');
     target.think = 999;
@@ -4937,7 +5137,7 @@ import { readStorage, writeStorage } from './storage.js';
       clearFightPick();
     }
     const chaser = figures.find(f => f.pursuit);
-    if (chaser && chaser !== selected) cancelPursuit(chaser);
+    if (chaser && chaser !== selected && !chaser.pursuit.auto) cancelPursuit(chaser);
     document.body.dataset.selection = has ? 'some' : 'none';
     document.body.dataset.fightPick = fightPick ? 'on' : 'off';
     document.body.dataset.pursuit = chaser && chaser.pursuit ? 'on' : 'off';
@@ -5111,6 +5311,10 @@ import { readStorage, writeStorage } from './storage.js';
     });
   }
 
+  if (chaosBtn) {
+    chaosBtn.addEventListener('click', () => setChaos(!chaosOn));
+  }
+
   colorPicker.addEventListener('input', () => {
     for (const f of selectionList()) f.color = colorPicker.value;
     updateUI();
@@ -5171,6 +5375,7 @@ import { readStorage, writeStorage } from './storage.js';
   document.body.dataset.scene = sceneId;
 
   syncCinematicUI();
+  syncChaosUI();
   if (cinematicBtn) {
     cinematicBtn.addEventListener('click', () => setCinematic(!cinematicOn));
   }
@@ -5480,6 +5685,7 @@ import { readStorage, writeStorage } from './storage.js';
 
     if (dt > 0) {
       for (const f of figures) f.update(dt, level);
+      updateChaos(dt);
       updateChat(dt);
       updateBirds(dt);
       updateEffects(dt);
